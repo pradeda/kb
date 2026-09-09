@@ -1,0 +1,190 @@
+[
+  {
+    "id": "h1",
+    "category": "homelab",
+    "query": "Pi-hole per-IP blocking configuration",
+    "expected_scope": "homelab",
+    "expected_refs": ["homelab:724", "homelab:725", "homelab:726"],
+    "must_find_min": 2,
+    "description": "Pi-hole per-IP game blocking for specific user"
+  },
+  {
+    "id": "h2",
+    "category": "homelab",
+    "query": "Agora backup NAS WAL-safe procedure",
+    "expected_scope": "homelab",
+    "expected_refs": ["homelab:722", "homelab:723"],
+    "must_find_min": 1,
+    "description": "Agora application backup to NAS"
+  },
+  {
+    "id": "h3",
+    "category": "homelab",
+    "query": "FlareSolverr 1337x burst Docker performance",
+    "expected_scope": "homelab",
+    "expected_refs": ["homelab:719", "homelab:720"],
+    "must_find_min": 1,
+    "description": "FlareSolverr burst recurrence and throttle issue"
+  },
+  {
+    "id": "h4",
+    "category": "homelab",
+    "query": "check-logs daily LLM overflow gotcha",
+    "expected_scope": "homelab",
+    "expected_refs": ["homelab:693", "homelab:694"],
+    "must_find_min": 1,
+    "description": "check-logs-daily service LLM overflow incident"
+  },
+  {
+    "id": "h5",
+    "category": "homelab",
+    "query": "DeepSeek Harness deployment Nexus CLI",
+    "expected_scope": "homelab",
+    "expected_refs": ["homelab:691", "homelab:692"],
+    "must_find_min": 1,
+    "description": "DeepSeek Harness (dsh) deployment and CLI mode"
+  },
+  {
+    "id": "h6",
+    "category": "homelab",
+    "query": "Claude Remote Control security mobile access Nexus",
+    "expected_scope": "homelab",
+    "expected_refs": ["homelab:520"],
+    "must_find_min": 1,
+    "description": "Claude Code Remote Control persistent mobile setup"
+  },
+  {
+    "id": "a1",
+    "category": "ai",
+    "query": "fine-tuning LLM tech debt calcification vs prompting skills",
+    "expected_scope": "ai",
+    "expected_refs": ["ai:176"],
+    "must_find_min": 1,
+    "description": "Fine-tuning as tech debt, model-agnostic skills approach"
+  },
+  {
+    "id": "a2",
+    "category": "ai",
+    "query": "agent memory architecture complete design",
+    "expected_scope": "ai",
+    "expected_refs": ["ai:159"],
+    "must_find_min": 1,
+    "description": "Agent memory architecture patterns"
+  },
+  {
+    "id": "a3",
+    "category": "ai",
+    "query": "MCP tools connecting AI agents APIs protocols",
+    "expected_scope": "ai",
+    "expected_refs": ["ai:160"],
+    "must_find_min": 1,
+    "description": "Ways to connect AI agents to tools via MCP"
+  },
+  {
+    "id": "a4",
+    "category": "ai",
+    "query": "semantic blindness LLM sensor data industrial scale",
+    "expected_scope": "ai",
+    "expected_refs": ["ai:3"],
+    "must_find_min": 1,
+    "description": "Semantic blindness paper - 500K sensors confused LLM"
+  },
+  {
+    "id": "a5",
+    "category": "ai",
+    "query": "automated code review AI kill the code review",
+    "expected_scope": "ai",
+    "expected_refs": ["ai:158"],
+    "must_find_min": 1,
+    "description": "Automated AI code review talk"
+  },
+  {
+    "id": "a6",
+    "category": "ai",
+    "query": "ColBERT multi-vector embedding training sentence transformers",
+    "expected_scope": "ai",
+    "expected_refs": ["ai:179"],
+    "must_find_min": 1,
+    "description": "Multi-vector embedding models training with Sentence Transformers"
+  },
+  {
+    "id": "x1",
+    "category": "cross",
+    "query": "AI ingest pipeline gotcha configuration publish latency",
+    "expected_scope": "both",
+    "expected_refs": ["homelab:600", "homelab:603", "homelab:605"],
+    "must_find_min": 1,
+    "description": "AI ingest pipeline operational gotchas (homelab entries about AI topic)"
+  },
+  {
+    "id": "x2",
+    "category": "cross",
+    "query": "ColBERT retrieval KB homelab evaluation multi-vector",
+    "expected_scope": "both",
+    "expected_refs": ["homelab:729", "ai:179"],
+    "must_find_min": 1,
+    "description": "ColBERT assessment spans both corpora - homelab eval + AI paper"
+  },
+  {
+    "id": "x3",
+    "category": "cross",
+    "query": "Qwen local model LM Studio Forrix endpoint",
+    "expected_scope": "both",
+    "expected_refs": ["homelab:671", "homelab:670"],
+    "must_find_min": 1,
+    "description": "Local Qwen model on Forrix via LM Studio"
+  },
+  {
+    "id": "x4",
+    "category": "cross",
+    "query": "recursive language models RLM large codebases pattern",
+    "expected_scope": "both",
+    "expected_refs": ["ai:12"],
+    "must_find_min": 1,
+    "description": "RLM pattern for coding agents - should find AI entry even in both scope"
+  },
+  {
+    "id": "b1",
+    "category": "bilingual",
+    "query": "kako radi Pi-hole blokiranje po IP adresi za specifičnog korisnika",
+    "query_alt": "how does Pi-hole per-IP blocking work for a specific user",
+    "query_alt_language": "en",
+    "expected_scope": "homelab",
+    "expected_refs": ["homelab:724", "homelab:725"],
+    "must_find_min": 1,
+    "description": "Serbian query about Pi-hole blocking, English alt"
+  },
+  {
+    "id": "b2",
+    "category": "bilingual",
+    "query": "kvantizacija i kompresija velikih jezičkih modela na edge uređajima",
+    "query_alt": "quantization and compression of large language models at the edge",
+    "query_alt_language": "en",
+    "expected_scope": "both",
+    "expected_refs": ["homelab:563"],
+    "must_find_min": 1,
+    "description": "Serbian query about model quantization/compression, English alt — homelab:563 is the Compression at the Edge NVIDIA talk"
+  },
+  {
+    "id": "b3",
+    "category": "bilingual",
+    "query": "Agora application backup procedure to NAS daily",
+    "query_alt": "Agora aplikacija backup procedura na NAS dnevno",
+    "query_alt_language": "sr",
+    "expected_scope": "homelab",
+    "expected_refs": ["homelab:722", "homelab:723"],
+    "must_find_min": 1,
+    "description": "English query about Agora backup, Serbian alt"
+  },
+  {
+    "id": "b4",
+    "category": "bilingual",
+    "query": "semantic blindness when LLM processes 500000 sensor names",
+    "query_alt": "semantička slepoća kada LLM obrađuje 500000 naziva senzora",
+    "query_alt_language": "sr",
+    "expected_scope": "ai",
+    "expected_refs": ["ai:3"],
+    "must_find_min": 1,
+    "description": "English query about semantic blindness, Serbian alt"
+  }
+]

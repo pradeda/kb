@@ -1,0 +1,19 @@
+router_version: corpus-router-v2-fts5-hybrid
+accept_thresholds:
+  homelab: 0.6
+  ai: 0.6
+reject_threshold: 0.4
+both_margin: 0.05
+dead_zone:
+  lower: 0.4
+  upper: 0.6
+candidate_k: 25
+max_distance:
+  homelab: 0.6
+  ai: 0.6
+ai_decay:
+  mode: disabled
+fts5:
+  enabled: true
+  semantic_k: 20
+  lexical_k: 5

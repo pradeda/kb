@@ -1,0 +1,291 @@
+{
+  "timestamp": "2026-09-08T17:43:12.282653+00:00",
+  "test_set": "/opt/kb/eval/rewrite_test_set.json",
+  "questions": 15,
+  "evaluated": 6,
+  "errors": 9,
+  "outcomes": {
+    "no_change": 5,
+    "regression": 1
+  },
+  "total_gained_entries": 0,
+  "total_lost_entries": 1,
+  "avg_orig_keyword_overlap": 1,
+  "avg_union_keyword_overlap": 1,
+  "rewrite_latency_ms": {
+    "p50": 9473.5,
+    "p95": 13583.1,
+    "mean": 9275.9
+  },
+  "dual_latency_ms": {
+    "p50": 10990.2,
+    "p95": 12386.3,
+    "mean": 11147.2
+  },
+  "details": [
+    {
+      "id": "rw-01",
+      "category": "infrastructure",
+      "query": "How is NAS connected to the rest of the network?",
+      "error": "rewrite failed: empty",
+      "rewrite_latency_ms": 13506.9
+    },
+    {
+      "id": "rw-02",
+      "category": "infrastructure",
+      "query": "What backup strategy do we use?",
+      "rewritten": "backup strategy NAS",
+      "rewrite_latency_ms": 8877.0,
+      "keyword_hint": "backup NAS strategy schedule",
+      "original_refs": [],
+      "union_refs": [],
+      "keyword_refs": [
+        "homelab:410",
+        "homelab:417"
+      ],
+      "original_count": 0,
+      "union_count": 0,
+      "keyword_count": 2,
+      "gained": [],
+      "lost": [],
+      "gained_count": 0,
+      "lost_count": 0,
+      "orig_keyword_overlap": 0,
+      "union_keyword_overlap": 0,
+      "original_candidate_count": 50,
+      "union_candidate_count": 50,
+      "dual_elapsed_ms": 10709.4,
+      "outcome": "no_change"
+    },
+    {
+      "id": "rw-03",
+      "category": "kb-pipeline",
+      "query": "How do I add a new entry to the knowledge base?",
+      "rewritten": "add",
+      "rewrite_latency_ms": 13583.1,
+      "keyword_hint": "KB add entry workflow",
+      "original_refs": [],
+      "union_refs": [],
+      "keyword_refs": [
+        "homelab:165",
+        "homelab:210",
+        "homelab:270",
+        "homelab:250"
+      ],
+      "original_count": 0,
+      "union_count": 0,
+      "keyword_count": 4,
+      "gained": [],
+      "lost": [],
+      "gained_count": 0,
+      "lost_count": 0,
+      "orig_keyword_overlap": 0,
+      "union_keyword_overlap": 0,
+      "original_candidate_count": 50,
+      "union_candidate_count": 50,
+      "dual_elapsed_ms": 10913.8,
+      "outcome": "no_change"
+    },
+    {
+      "id": "rw-04",
+      "category": "ai-ingest",
+      "query": "Why did the AI ingest produce low quality entries?",
+      "error": "rewrite failed: empty",
+      "rewrite_latency_ms": 13614.2
+    },
+    {
+      "id": "rw-05",
+      "category": "kb-pipeline",
+      "query": "What caused the last KB search outage?",
+      "rewritten": "KB search outage root cause pipeline",
+      "rewrite_latency_ms": 8907.2,
+      "keyword_hint": "KB search outage power loss",
+      "original_refs": [
+        "homelab:761"
+      ],
+      "union_refs": [
+        "homelab:761"
+      ],
+      "keyword_refs": [
+        "homelab:761",
+        "homelab:619",
+        "homelab:764",
+        "homelab:266",
+        "homelab:354"
+      ],
+      "original_count": 1,
+      "union_count": 1,
+      "keyword_count": 5,
+      "gained": [],
+      "lost": [],
+      "gained_count": 0,
+      "lost_count": 0,
+      "orig_keyword_overlap": 1,
+      "union_keyword_overlap": 1,
+      "original_candidate_count": 50,
+      "union_candidate_count": 50,
+      "dual_elapsed_ms": 11066.7,
+      "outcome": "no_change"
+    },
+    {
+      "id": "rw-06",
+      "category": "infrastructure",
+      "query": "How do we monitor services on Nexus?",
+      "rewritten": "monitor services Nexus",
+      "rewrite_latency_ms": 4104.1,
+      "keyword_hint": "Nexus monitoring check-logs services",
+      "original_refs": [
+        "homelab:583",
+        "homelab:185",
+        "homelab:353"
+      ],
+      "union_refs": [
+        "homelab:583",
+        "homelab:185"
+      ],
+      "keyword_refs": [
+        "homelab:695",
+        "homelab:778",
+        "homelab:185",
+        "homelab:583",
+        "homelab:207"
+      ],
+      "original_count": 3,
+      "union_count": 2,
+      "keyword_count": 5,
+      "gained": [],
+      "lost": [
+        "homelab:353"
+      ],
+      "gained_count": 0,
+      "lost_count": 1,
+      "orig_keyword_overlap": 2,
+      "union_keyword_overlap": 2,
+      "original_candidate_count": 50,
+      "union_candidate_count": 50,
+      "dual_elapsed_ms": 12386.3,
+      "outcome": "regression"
+    },
+    {
+      "id": "rw-07",
+      "category": "kb-pipeline",
+      "query": "How does the reranker work in KB search?",
+      "error": "rewrite failed: empty",
+      "rewrite_latency_ms": 13374.0
+    },
+    {
+      "id": "rw-08",
+      "category": "infrastructure",
+      "query": "How does Pi-hole handle DNS for the network?",
+      "error": "rewrite failed: empty",
+      "rewrite_latency_ms": 13383.3
+    },
+    {
+      "id": "rw-09",
+      "category": "infrastructure",
+      "query": "How is WireGuard configured on the Raspberry Pi?",
+      "rewritten": "WireGuard configuration Raspberry Pi setup",
+      "rewrite_latency_ms": 10143.8,
+      "keyword_hint": "WireGuard RPi4 configuration",
+      "original_refs": [
+        "homelab:300",
+        "homelab:375",
+        "homelab:140",
+        "homelab:141"
+      ],
+      "union_refs": [
+        "homelab:300",
+        "homelab:375",
+        "homelab:140",
+        "homelab:141"
+      ],
+      "keyword_refs": [
+        "homelab:300",
+        "homelab:375",
+        "homelab:151",
+        "homelab:402",
+        "homelab:301"
+      ],
+      "original_count": 4,
+      "union_count": 4,
+      "keyword_count": 5,
+      "gained": [],
+      "lost": [],
+      "gained_count": 0,
+      "lost_count": 0,
+      "orig_keyword_overlap": 2,
+      "union_keyword_overlap": 2,
+      "original_candidate_count": 50,
+      "union_candidate_count": 50,
+      "dual_elapsed_ms": 11250.6,
+      "outcome": "no_change"
+    },
+    {
+      "id": "rw-10",
+      "category": "infrastructure",
+      "query": "What models are available on Forrix for local inference?",
+      "error": "rewrite failed: empty",
+      "rewrite_latency_ms": 13427.9
+    },
+    {
+      "id": "rw-11",
+      "category": "kb-pipeline",
+      "query": "What is the ChromaDB embedding model we use?",
+      "error": "rewrite failed: empty",
+      "rewrite_latency_ms": 13383.8
+    },
+    {
+      "id": "rw-12",
+      "category": "infrastructure",
+      "query": "What happens when Docker containers lose NFS mounts?",
+      "error": "rewrite failed: empty",
+      "rewrite_latency_ms": 13389.6
+    },
+    {
+      "id": "rw-13",
+      "category": "infrastructure",
+      "query": "Kako se Plex povezuje sa NAS-om?",
+      "error": "rewrite failed: empty",
+      "rewrite_latency_ms": 13498.0
+    },
+    {
+      "id": "rw-14",
+      "category": "kb-pipeline",
+      "query": "What is the purpose of the corpus router in KB v2?",
+      "error": "rewrite failed: empty",
+      "rewrite_latency_ms": 13596.4
+    },
+    {
+      "id": "rw-15",
+      "category": "kb-pipeline",
+      "query": "How did we fix the HNSW blind window problem?",
+      "rewritten": "HNSW blind window problem fix",
+      "rewrite_latency_ms": 10039.9,
+      "keyword_hint": "HNSW blind window full-scan bypass ChromaDB",
+      "original_refs": [
+        "homelab:787"
+      ],
+      "union_refs": [
+        "homelab:787"
+      ],
+      "keyword_refs": [
+        "homelab:787",
+        "homelab:795",
+        "homelab:785"
+      ],
+      "original_count": 1,
+      "union_count": 1,
+      "keyword_count": 3,
+      "gained": [],
+      "lost": [],
+      "gained_count": 0,
+      "lost_count": 0,
+      "orig_keyword_overlap": 1,
+      "union_keyword_overlap": 1,
+      "original_candidate_count": 50,
+      "union_candidate_count": 50,
+      "dual_elapsed_ms": 10556.2,
+      "outcome": "no_change"
+    }
+  ]
+}

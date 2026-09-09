@@ -1,0 +1,566 @@
+<!doctype html>
+<html lang="sr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KB Atlas</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='none' stroke='%231f6b6e' stroke-width='2.5'/%3E%3Cellipse cx='16' cy='16' rx='5.5' ry='13' fill='none' stroke='%231f6b6e' stroke-width='2'/%3E%3Cpath d='M3.6 11.5h24.8M3.6 20.5h24.8' stroke='%231f6b6e' stroke-width='2' fill='none'/%3E%3Ccircle cx='21.5' cy='9.5' r='3.6' fill='%239a6414'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --paper: #f4f6f7; --surface: #ffffff; --ink: #131a1f; --muted: #5b6b72;
+    --rule: #ccd5d8; --homelab: #1f6b6e; --homelab-soft: #e2eeee;
+    --ai: #9a6414; --ai-soft: #f4ebdc; --warn: #96393a;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0e1417; --surface: #151d21; --ink: #e6ecee; --muted: #93a3aa;
+      --rule: #27353b; --homelab: #52b3ae; --homelab-soft: #14312f;
+      --ai: #dda254; --ai-soft: #33270f; --warn: #d4756f;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #0e1417; --surface: #151d21; --ink: #e6ecee; --muted: #93a3aa;
+    --rule: #27353b; --homelab: #52b3ae; --homelab-soft: #14312f;
+    --ai: #dda254; --ai-soft: #33270f; --warn: #d4756f;
+  }
+  :root[data-theme="light"] {
+    --paper: #f4f6f7; --surface: #ffffff; --ink: #131a1f; --muted: #5b6b72;
+    --rule: #ccd5d8; --homelab: #1f6b6e; --homelab-soft: #e2eeee;
+    --ai: #9a6414; --ai-soft: #f4ebdc; --warn: #96393a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: var(--sans); font-size: 15px; line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 78rem; margin: 0 auto; padding: 2rem 1.1rem 4rem; display: flex; flex-direction: column; gap: 2rem; }
+  h1, h2, h3 { margin: 0; letter-spacing: -0.02em; line-height: 1.18; text-wrap: balance; }
+  h1 { font-size: clamp(1.7rem, 4vw, 2.4rem); }
+  h2 { font-size: 1.3rem; }
+  h3 { font-size: 0.98rem; }
+  p { margin: 0; }
+  .eyebrow { font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.13em; text-transform: uppercase; color: var(--muted); }
+  .mono { font-family: var(--mono); }
+
+  header { border-bottom: 2px solid var(--ink); padding-bottom: 1.3rem; display: flex; flex-direction: column; gap: 0.6rem; }
+  .headrow { display: flex; justify-content: space-between; align-items: flex-end; gap: 1rem; flex-wrap: wrap; }
+  .stats { display: flex; flex-wrap: wrap; gap: 1.5rem; font-family: var(--mono); font-size: 0.8rem; }
+  .stat { display: flex; flex-direction: column; }
+  .stat b { font-size: 1.5rem; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .stat span { color: var(--muted); font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; }
+  .stat.hl b { color: var(--homelab); } .stat.aic b { color: var(--ai); }
+
+  button {
+    font-family: var(--mono); font-size: 0.74rem; letter-spacing: 0.04em;
+    background: var(--surface); color: var(--ink); border: 1px solid var(--rule);
+    padding: 0.34em 0.7em; cursor: pointer; border-radius: 2px;
+  }
+  button[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  button:focus-visible { outline: 2px solid var(--ai); outline-offset: 2px; }
+  .controls { display: flex; gap: 0.35rem; flex-wrap: wrap; align-items: center; }
+  .ctlabel { font-family: var(--mono); font-size: 0.64rem; letter-spacing: 0.11em; text-transform: uppercase; color: var(--muted); }
+  .ctsep { width: 1px; align-self: stretch; background: var(--rule); margin: 0 0.35rem; }
+
+  section { display: flex; flex-direction: column; gap: 0.9rem; }
+  .sechead { border-top: 1px solid var(--rule); padding-top: 1rem; display: flex; flex-direction: column; gap: 0.2rem; }
+  .note { color: var(--muted); font-size: 0.9rem; max-width: 62ch; }
+
+  .canvaswrap { position: relative; background: var(--surface); border: 1px solid var(--rule); }
+  canvas { display: block; width: 100%; height: 34rem; cursor: crosshair; }
+  #tip {
+    position: absolute; pointer-events: none; opacity: 0; transition: opacity .12s;
+    background: var(--ink); color: var(--paper); padding: 0.3rem 0.5rem;
+    font-family: var(--mono); font-size: 0.7rem; max-width: 18rem; border-radius: 2px; z-index: 5;
+  }
+  @media (prefers-reduced-motion: reduce) { #tip { transition: none; } }
+
+  /* ---- citac ---- */
+  .backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,.5); z-index: 50;
+    display: flex; align-items: flex-start; justify-content: center;
+    padding: 2.5rem 1rem; overflow-y: auto;
+  }
+  .backdrop[hidden] { display: none; }
+  .reader {
+    background: var(--paper); border: 1px solid var(--rule);
+    border-left: 5px solid var(--rc, var(--rule));
+    max-width: 48rem; width: 100%; padding: 1.5rem;
+    display: flex; flex-direction: column; gap: 0.9rem;
+  }
+  .reader .top { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; }
+  .reader .corpus-tag { font-family: var(--mono); font-size: 0.66rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--rc, var(--muted)); }
+  .reader h2 { font-size: 1.35rem; }
+  .reader dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 0.1rem 0.8rem; font-family: var(--mono); font-size: 0.72rem; }
+  .reader dt { color: var(--muted); }
+  .reader dd { margin: 0; word-break: break-word; }
+  .summary { background: var(--surface); border: 1px solid var(--rule); padding: 0.7rem 0.85rem; font-size: 0.9rem; }
+  .body {
+    background: var(--surface); border: 1px solid var(--rule); padding: 1rem 1.15rem;
+    max-height: 26rem; overflow-y: auto; font-size: 0.92rem; line-height: 1.72;
+    display: flex; flex-direction: column; gap: 0.5rem;
+  }
+  .body .h { font-weight: 700; letter-spacing: -0.01em; }
+  .body .ln { white-space: pre-wrap; word-break: break-word; }
+  .body a { color: var(--homelab); word-break: break-all; }
+  .trunc { font-family: var(--mono); font-size: 0.7rem; color: var(--warn); }
+  .nb { display: flex; flex-direction: column; gap: 0.1rem; }
+  .nb button {
+    width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px dotted var(--rule);
+    font-family: var(--sans); font-size: 0.82rem; color: var(--ink);
+    display: flex; justify-content: space-between; gap: 0.7rem; padding: 0.3rem 0; border-radius: 0;
+  }
+  .nb button:hover { color: var(--ai); }
+  .nb .d { font-family: var(--mono); font-size: 0.68rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  /* ---- lista clanova klastera ---- */
+  .members { display: flex; flex-direction: column; gap: 0; margin-top: 0.3rem; border-top: 1px solid var(--rule); }
+  .members[hidden] { display: none; }
+  .members button {
+    width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px dotted var(--rule);
+    font-family: var(--sans); font-size: 0.8rem; color: var(--ink); padding: 0.32rem 0;
+    display: flex; gap: 0.45rem; align-items: baseline; border-radius: 0;
+  }
+  .members button:hover { color: var(--ai); }
+  .card > .head { cursor: pointer; display: flex; flex-direction: column; gap: 0.3rem; }
+  .card .toggle { font-family: var(--mono); font-size: 0.68rem; color: var(--muted); }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 0.7rem; }
+  .card { background: var(--surface); border: 1px solid var(--rule); border-left: 4px solid var(--cc, var(--rule)); padding: 0.75rem; display: flex; flex-direction: column; gap: 0.3rem; }
+  .card h3 { font-size: 0.9rem; }
+  .card .meta { font-family: var(--mono); font-size: 0.68rem; color: var(--muted); display: flex; gap: 0.7rem; flex-wrap: wrap; }
+  .card .mix { display: flex; height: 5px; border-radius: 2px; overflow: hidden; background: var(--rule); }
+  .card .mix i { display: block; }
+  .card ul { margin: 0.15rem 0 0; padding-left: 1rem; font-size: 0.76rem; color: var(--muted); }
+
+  .tablewrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; min-width: 34rem; font-size: 0.84rem; }
+  th, td { text-align: left; padding: 0.45em 0.7em 0.45em 0; border-bottom: 1px solid var(--rule); vertical-align: baseline; }
+  th { font-family: var(--mono); font-size: 0.68rem; letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); font-weight: 400; }
+  td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .pill { font-family: var(--mono); font-size: 0.62rem; letter-spacing: 0.06em; text-transform: uppercase; padding: 0.1em 0.4em; border-radius: 2px; }
+  .pill.hl { background: var(--homelab-soft); color: var(--homelab); }
+  .pill.aic { background: var(--ai-soft); color: var(--ai); }
+  .empty { color: var(--muted); font-size: 0.9rem; font-style: italic; }
+  a.rowlink { color: var(--ink); text-decoration: none; cursor: pointer; }
+  a.rowlink:hover { color: var(--ai); text-decoration: underline; }
+  footer { border-top: 1px solid var(--rule); padding-top: 1rem; color: var(--muted); font-size: 0.78rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="headrow">
+      <div>
+        <div class="eyebrow">Nexus knowledge base</div>
+        <h1>Atlas</h1>
+      </div>
+      <div class="controls">
+        <span class="ctlabel">corpus</span>
+        <button id="f-all" aria-pressed="true">oba</button>
+        <button id="f-homelab" aria-pressed="false">homelab</button>
+        <button id="f-ai" aria-pressed="false">ai</button>
+        <span class="ctsep"></span>
+        <span class="ctlabel">boja</span>
+        <button id="mode-corpus" aria-pressed="true">corpus</button>
+        <button id="mode-cluster" aria-pressed="false">klaster</button>
+        <span class="ctsep"></span>
+        <button id="theme">tema</button>
+      </div>
+    </div>
+    <div class="stats" id="stats"></div>
+  </header>
+
+  <section>
+    <div class="sechead">
+      <div class="eyebrow">Projekcija</div>
+      <h2>Semantička mapa</h2>
+      <p class="note">768 dimenzija svedeno na 2 klasičnim MDS-om. Blizina znači sličnost značenja — ne deljene tagove. Pređi mišem za naslov, klikni da pročitaš unos.</p>
+    </div>
+    <div class="canvaswrap">
+      <canvas id="map"></canvas>
+      <div id="tip"></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sechead">
+      <div class="eyebrow">Struktura</div>
+      <h2>Klasteri</h2>
+      <p class="note">Grupisano po značenju, ne po tagu. Traka pokazuje odnos corpusa unutar klastera — klaster koji je pretežno oker unutar Homelab corpusa je kandidat za preseljenje. Klikni klaster da vidiš sve njegove unose, poređane od najreprezentativnijeg.</p>
+    </div>
+    <div class="cards" id="clusters"></div>
+  </section>
+
+  <section>
+    <div class="sechead">
+      <div class="eyebrow">Redundansa</div>
+      <h2>Bliski parovi</h2>
+      <p class="note">Parovi na kosinusnoj razdaljini ispod 0.18. Nisu nužno duplikati, ali su kandidati za spajanje ili proveru pre nove objave.</p>
+    </div>
+    <div class="tablewrap"><table id="redundant"></table></div>
+  </section>
+
+  <section>
+    <div class="sechead">
+      <div class="eyebrow">Praznine</div>
+      <h2>Izolovani unosi</h2>
+      <p class="note">Najbliži sused je dalji od 0.45 — znanje koje ni sa čim ne stoji u vezi. Ili jedinstveno, ili zaboravljeno.</p>
+    </div>
+    <div class="tablewrap"><table id="isolated"></table></div>
+  </section>
+
+  <footer id="foot"></footer>
+</div>
+
+<div class="backdrop" id="backdrop" hidden>
+  <article class="reader" id="reader" role="dialog" aria-modal="true" aria-labelledby="reader-title" tabindex="-1"></article>
+</div>
+
+<script type="application/json" id="atlas-data">__ATLAS_DATA__</script>
+<script>
+(function () {
+  "use strict";
+  const D = JSON.parse(document.getElementById("atlas-data").textContent);
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+  /* ---------- filter po corpusu ---------- */
+  let filter = "all";
+  const hit = (corpus) => filter === "all" || corpus === filter;
+  const corpusOf = (key) => key.split(":")[0];
+
+  $("foot").textContent =
+    `Generisano ${D.generated} · MDS + k-means nad ${D.totals.all} vektora · bez LLM poziva`;
+
+  /* ---------- statistika ---------- */
+  function renderStats() {
+    const vis = D.entries.filter((e) => hit(e.corpus));
+    const cl = D.clusters.filter((c) => c.members.some((k) => hit(corpusOf(k)))).length;
+    const rd = D.redundant.filter((p) => hit(p.ac) && hit(p.bc)).length;
+    const iso = D.isolated.filter((r) => hit(r.corpus)).length;
+    const rows = filter === "all"
+      ? [["", vis.length, "unosa"],
+         ["hl", D.totals.homelab, "homelab"],
+         ["aic", D.totals.ai, "ai"]]
+      : [[filter === "ai" ? "aic" : "hl", vis.length, filter + " unosa"]];
+    $("stats").innerHTML = rows.concat([
+      ["", cl, "klastera"], ["", rd, "bliskih parova"], ["", iso, "izolovanih"]
+    ]).map(([c, v, l]) => `<div class="stat ${c}"><b>${v}</b><span>${l}</span></div>`).join("");
+  }
+
+  /* ---------- mapa ---------- */
+  const cv = $("map"), ctx = cv.getContext("2d"), tip = $("tip");
+  const E = D.entries;
+  let mode = "corpus", hover = -1, selected = -1, pts = [];
+
+  const palette = () => {
+    const hl = css("--homelab"), ai = css("--ai");
+    const wheel = ["#4f8fc0", "#c0664f", "#6ba84f", "#9a6bb5", "#c09a4f",
+                   "#4fb0a8", "#b5566f", "#7f8b45", "#5566b5", "#a35fa3",
+                   "#5f9a7a", "#b58a56", "#6f6fb5", "#a3684f", "#4f9ab5", "#8b5f8b"];
+    return { hl, ai, wheel };
+  };
+
+  function resize() {
+    const dpr = window.devicePixelRatio || 1;
+    const r = cv.getBoundingClientRect();
+    cv.width = Math.round(r.width * dpr);
+    cv.height = Math.round(r.height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    draw();
+  }
+
+  function project() {
+    const r = cv.getBoundingClientRect();
+    const pad = 26;
+    const w = r.width - pad * 2, h = r.height - pad * 2;
+    const s = Math.min(w, h) / 2;
+    const cx = r.width / 2, cy = r.height / 2;
+    pts = E.map((e) => ({ x: cx + e.x * s, y: cy + e.y * s }));
+  }
+
+  function colorOf(e) {
+    const p = palette();
+    if (mode === "corpus") return e.corpus === "ai" ? p.ai : p.hl;
+    return p.wheel[e.cluster % p.wheel.length];
+  }
+
+  function draw() {
+    const r = cv.getBoundingClientRect();
+    project();
+    ctx.clearRect(0, 0, r.width, r.height);
+
+    // veze ka susedima izabranog
+    if (selected >= 0) {
+      const sel = E[selected];
+      ctx.strokeStyle = css("--muted"); ctx.globalAlpha = 0.55; ctx.lineWidth = 1;
+      sel.neighbors.forEach((nb) => {
+        const j = E.findIndex((x) => x.key === nb.key);
+        if (j < 0) return;
+        ctx.beginPath();
+        ctx.moveTo(pts[selected].x, pts[selected].y);
+        ctx.lineTo(pts[j].x, pts[j].y);
+        ctx.stroke();
+      });
+      ctx.globalAlpha = 1;
+    }
+
+    E.forEach((e, i) => {
+      if (!hit(e.corpus)) return;
+      const p = pts[i];
+      const isSel = i === selected, isHov = i === hover;
+      const rad = isSel ? 7 : isHov ? 6 : (e.corpus === "ai" ? 4.5 : 3.4);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, rad, 0, Math.PI * 2);
+      ctx.fillStyle = colorOf(e);
+      ctx.globalAlpha = isSel || isHov ? 1 : 0.78;
+      ctx.fill();
+      if (isSel || isHov) {
+        ctx.globalAlpha = 1;
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = css("--ink");
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    });
+  }
+
+  function pick(mx, my) {
+    let best = -1, bd = 14 * 14;
+    pts.forEach((p, i) => {
+      if (!hit(E[i].corpus)) return;   // sakrivene tacke se ne mogu kliknuti
+      const dx = p.x - mx, dy = p.y - my, d = dx * dx + dy * dy;
+      if (d < bd) { bd = d; best = i; }
+    });
+    return best;
+  }
+
+  cv.addEventListener("mousemove", (ev) => {
+    const r = cv.getBoundingClientRect();
+    const mx = ev.clientX - r.left, my = ev.clientY - r.top;
+    const i = pick(mx, my);
+    if (i !== hover) { hover = i; draw(); }
+    if (i >= 0) {
+      tip.style.opacity = "1";
+      tip.style.left = Math.min(mx + 12, r.width - 200) + "px";
+      tip.style.top = (my + 14) + "px";
+      tip.textContent = E[i].title;
+    } else { tip.style.opacity = "0"; }
+  });
+  cv.addEventListener("mouseleave", () => { hover = -1; tip.style.opacity = "0"; draw(); });
+  cv.addEventListener("click", (ev) => {
+    const r = cv.getBoundingClientRect();
+    const i = pick(ev.clientX - r.left, ev.clientY - r.top);
+    if (i >= 0) open(E[i].key);
+  });
+
+  /* ---------- citac ---------- */
+  const backdrop = $("backdrop"), reader = $("reader");
+  const byKey = new Map(E.map((e, i) => [e.key, i]));
+  let lastFocus = null;
+
+  /* Minimalno formatiranje markdown izvora: naslovi podebljani,
+     goli URL-ovi klikabilni. Nema parsiranja — samo citljivost. */
+  function formatBody(text) {
+    if (!text) return `<p class="empty">Nema sadržaja u bazi.</p>`;
+    return text.split(/\n{2,}/).map((block) => {
+      const b = block.trim();
+      if (!b) return "";
+      const heading = /^#{1,6}\s+/.test(b);
+      const clean = esc(heading ? b.replace(/^#{1,6}\s+/, "") : b)
+        .replace(/(https?:\/\/[^\s<)"']+)/g,
+          '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>');
+      return `<div class="${heading ? "h" : "ln"}">${clean}</div>`;
+    }).join("");
+  }
+
+  function open(key) {
+    const i = byKey.get(key);
+    if (i === undefined) return;
+    const e = E[i];
+    selected = i;
+    if (!lastFocus) lastFocus = document.activeElement;
+
+    const col = e.corpus === "ai" ? css("--ai") : css("--homelab");
+    reader.style.setProperty("--rc", col);
+    reader.innerHTML =
+      `<div class="top">` +
+        `<div><div class="corpus-tag">${esc(e.corpus)} · ${esc(e.key)}</div>` +
+        `<h2 id="reader-title">${esc(e.title)}</h2></div>` +
+        `<button id="close-reader" aria-label="Zatvori">zatvori</button>` +
+      `</div>` +
+      `<dl>` +
+        `<dt>tagovi</dt><dd>${e.tags.length ? esc(e.tags.join(", ")) : "—"}</dd>` +
+        `<dt>tip</dt><dd>${esc(e.type || "—")}</dd>` +
+        `<dt>kreiran</dt><dd>${esc((e.created || "—").slice(0, 10))}</dd>` +
+        `<dt>klaster</dt><dd>${e.cluster} · ${esc(clusterLabel(e.cluster))}</dd>` +
+        `<dt>izvor</dt><dd>${esc(e.raw_path || "—")}</dd>` +
+      `</dl>` +
+      (e.summary ? `<div class="summary">${esc(e.summary)}</div>` : "") +
+      `<div class="body">${formatBody(e.text)}</div>` +
+      (e.truncated
+        ? `<p class="trunc">Prikazano prvih ${e.text.length} od ${e.chars} znakova — ceo tekst je u izvornom fajlu.</p>`
+        : "") +
+      `<div class="eyebrow">najbliži susedi</div>` +
+      `<nav class="nb">` +
+      e.neighbors.map((nb) =>
+        `<button data-key="${esc(nb.key)}"><span>${esc(nb.title)}</span><span class="d">${nb.d}</span></button>`
+      ).join("") +
+      `</nav>`;
+
+    reader.querySelectorAll("button[data-key]").forEach((b) =>
+      b.addEventListener("click", () => open(b.dataset.key)));
+    $("close-reader").addEventListener("click", close);
+
+    backdrop.hidden = false;
+    reader.focus();
+    draw();
+  }
+
+  function close() {
+    backdrop.hidden = true;
+    if (lastFocus) { lastFocus.focus(); lastFocus = null; }
+  }
+  backdrop.addEventListener("click", (ev) => { if (ev.target === backdrop) close(); });
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && !backdrop.hidden) close();
+  });
+
+  const clusterLabel = (id) => {
+    const c = D.clusters.find((x) => x.id === id);
+    return c ? c.label : "—";
+  };
+
+  const tag = (c) => `<span class="pill ${c === "ai" ? "aic" : "hl"}">${c}</span>`;
+
+  /* ---------- klasteri ---------- */
+  function renderClusters() {
+    const p = palette();
+    const view = D.clusters
+      .map((c) => {
+        const members = c.members.filter((k) => hit(corpusOf(k)));
+        return { c, members, n: members.length };
+      })
+      .filter((v) => v.n > 0)
+      .sort((a, b) => b.n - a.n);   // sortirano po broju vidljivih, ne ukupnih
+
+    if (!view.length) {
+      $("clusters").innerHTML = `<p class="empty">Nijedan klaster nema unose u ovom corpusu.</p>`;
+      return;
+    }
+
+    $("clusters").innerHTML = view.map(({ c, members, n }) => {
+      const col = p.wheel[c.id % p.wheel.length];
+      const tot = c.homelab + c.ai || 1;
+      const mix = filter === "all"
+        ? `<div class="mix">
+             <i style="width:${(c.homelab / tot) * 100}%;background:${p.hl}"></i>
+             <i style="width:${(c.ai / tot) * 100}%;background:${p.ai}"></i>
+           </div>
+           <div class="meta"><span>homelab ${c.homelab}</span><span>ai ${c.ai}</span>
+             <span class="toggle">▸ otvori</span></div>`
+        : `<div class="meta"><span>od ukupno ${c.size} u klasteru</span>
+             <span class="toggle">▸ otvori</span></div>`;
+      return `<article class="card" style="--cc:${col}">
+        <div class="head" role="button" tabindex="0" aria-expanded="false">
+          <h3>${esc(c.label)}</h3>
+          <div class="meta"><span>${n} unosa</span><span>kohezija ${c.cohesion}</span></div>
+          ${mix}
+        </div>
+        <div class="members" hidden>${members.map((k) => {
+          const e = E[byKey.get(k)];
+          if (!e) return "";
+          return `<button data-key="${esc(k)}">${tag(e.corpus)}<span>${esc(e.title)}</span></button>`;
+        }).join("")}</div>
+      </article>`;
+    }).join("");
+
+    $("clusters").querySelectorAll(".head").forEach((h) => {
+      h.addEventListener("click", () => toggleCluster(h));
+      h.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggleCluster(h); }
+      });
+    });
+    $("clusters").querySelectorAll("button[data-key]").forEach((b) =>
+      b.addEventListener("click", () => open(b.dataset.key)));
+  }
+
+  function toggleCluster(head) {
+    const card = head.parentElement;
+    const list = card.querySelector(".members");
+    const on = list.hidden;
+    list.hidden = !on;
+    head.setAttribute("aria-expanded", String(on));
+    head.querySelector(".toggle").textContent = on ? "▾ zatvori" : "▸ otvori";
+  }
+  /* ---------- tabele ---------- */
+  const cell = (key, corpus, title) =>
+    `<td><a class="rowlink" data-key="${esc(key)}">${tag(corpus)} ${esc(title)}</a></td>`;
+
+  function renderTables() {
+    // pri filtriranju se prikazuju samo parovi u celosti unutar tog corpusa
+    const rd = D.redundant.filter((p) => hit(p.ac) && hit(p.bc));
+    const iso = D.isolated.filter((r) => hit(r.corpus));
+
+    $("redundant").innerHTML = rd.length
+      ? `<thead><tr><th>razdaljina</th><th>unos</th><th>unos</th></tr></thead><tbody>` +
+        rd.map((p) =>
+          `<tr><td class="num">${p.d}</td>` + cell(p.ak, p.ac, p.a) + cell(p.bk, p.bc, p.b) + `</tr>`
+        ).join("") + `</tbody>`
+      : `<tbody><tr><td class="empty">Nema parova ispod praga.</td></tr></tbody>`;
+
+    $("isolated").innerHTML = iso.length
+      ? `<thead><tr><th>razdaljina</th><th>unos</th></tr></thead><tbody>` +
+        iso.map((r) =>
+          `<tr><td class="num">${r.d}</td>` + cell(r.key, r.corpus, r.title) + `</tr>`
+        ).join("") + `</tbody>`
+      : `<tbody><tr><td class="empty">Nema izolovanih unosa.</td></tr></tbody>`;
+
+    document.querySelectorAll("a.rowlink[data-key]").forEach((a) =>
+      a.addEventListener("click", () => open(a.dataset.key)));
+  }
+
+  function renderAll() { renderStats(); renderClusters(); renderTables(); draw(); }
+
+  /* ---------- kontrole ---------- */
+  function setMode(m) {
+    mode = m;
+    $("mode-corpus").setAttribute("aria-pressed", String(m === "corpus"));
+    $("mode-cluster").setAttribute("aria-pressed", String(m === "cluster"));
+    draw();
+  }
+  $("mode-corpus").addEventListener("click", () => setMode("corpus"));
+  $("mode-cluster").addEventListener("click", () => setMode("cluster"));
+
+  function setFilter(f) {
+    filter = f;
+    ["all", "homelab", "ai"].forEach((k) =>
+      $("f-" + k).setAttribute("aria-pressed", String(k === f)));
+    // izbor koji je ispao iz filtera se ponistava
+    if (selected >= 0 && !hit(E[selected].corpus)) selected = -1;
+    hover = -1;
+    renderAll();
+  }
+  ["all", "homelab", "ai"].forEach((k) =>
+    $("f-" + k).addEventListener("click", () => setFilter(k)));
+  $("theme").addEventListener("click", () => {
+    const cur = document.documentElement.getAttribute("data-theme");
+    const dark = cur ? cur === "dark"
+      : window.matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.setAttribute("data-theme", dark ? "light" : "dark");
+    renderAll();   // klaster boje i traka citaju CSS promenljive
+  });
+
+  window.addEventListener("resize", resize);
+  renderAll();
+  resize();
+})();
+</script>
+</body>
+</html>

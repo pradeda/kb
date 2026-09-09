@@ -1,0 +1,602 @@
+{
+  "timestamp": "2026-08-28T19:50:54.191088+00:00",
+  "corpus_sizes": {
+    "homelab": 629,
+    "ai": 180
+  },
+  "questions": 20,
+  "passed": 20,
+  "failed": 0,
+  "pass_rate": 1.0,
+  "avg_recall_at_5": 0.942,
+  "avg_noise_ratio": 0.526,
+  "avg_bilingual_parity": 0.525,
+  "by_category": {
+    "homelab": {
+      "total": 6,
+      "passed": 6,
+      "avg_recall": 1.0
+    },
+    "ai": {
+      "total": 6,
+      "passed": 6,
+      "avg_recall": 1.0
+    },
+    "cross": {
+      "total": 4,
+      "passed": 4,
+      "avg_recall": 0.708
+    },
+    "bilingual": {
+      "total": 4,
+      "passed": 4,
+      "avg_recall": 1.0
+    }
+  },
+  "details": [
+    {
+      "id": "h1",
+      "category": "homelab",
+      "query": "Pi-hole per-IP blocking configuration",
+      "scope": "homelab",
+      "expected_refs": [
+        "homelab:724",
+        "homelab:725",
+        "homelab:726"
+      ],
+      "found_refs": [
+        "homelab:724",
+        "homelab:725",
+        "homelab:726"
+      ],
+      "missed_refs": [],
+      "returned_refs": [
+        "homelab:724",
+        "homelab:725",
+        "homelab:726",
+        "homelab:402",
+        "homelab:300"
+      ],
+      "noise_refs": [
+        "homelab:402",
+        "homelab:300"
+      ],
+      "recall": 1.0,
+      "noise_ratio": 0.4,
+      "passed": true
+    },
+    {
+      "id": "h2",
+      "category": "homelab",
+      "query": "Agora backup NAS WAL-safe procedure",
+      "scope": "homelab",
+      "expected_refs": [
+        "homelab:722",
+        "homelab:723"
+      ],
+      "found_refs": [
+        "homelab:722",
+        "homelab:723"
+      ],
+      "missed_refs": [],
+      "returned_refs": [
+        "homelab:722",
+        "homelab:700",
+        "homelab:723",
+        "homelab:704"
+      ],
+      "noise_refs": [
+        "homelab:700",
+        "homelab:704"
+      ],
+      "recall": 1.0,
+      "noise_ratio": 0.5,
+      "passed": true
+    },
+    {
+      "id": "h3",
+      "category": "homelab",
+      "query": "FlareSolverr 1337x burst Docker performance",
+      "scope": "homelab",
+      "expected_refs": [
+        "homelab:719",
+        "homelab:720"
+      ],
+      "found_refs": [
+        "homelab:719",
+        "homelab:720"
+      ],
+      "missed_refs": [],
+      "returned_refs": [
+        "homelab:719",
+        "homelab:720",
+        "homelab:585",
+        "homelab:150"
+      ],
+      "noise_refs": [
+        "homelab:585",
+        "homelab:150"
+      ],
+      "recall": 1.0,
+      "noise_ratio": 0.5,
+      "passed": true
+    },
+    {
+      "id": "h4",
+      "category": "homelab",
+      "query": "check-logs daily LLM overflow gotcha",
+      "scope": "homelab",
+      "expected_refs": [
+        "homelab:693",
+        "homelab:694"
+      ],
+      "found_refs": [
+        "homelab:693",
+        "homelab:694"
+      ],
+      "missed_refs": [],
+      "returned_refs": [
+        "homelab:693",
+        "homelab:694",
+        "homelab:521",
+        "homelab:509",
+        "homelab:431"
+      ],
+      "noise_refs": [
+        "homelab:521",
+        "homelab:509",
+        "homelab:431"
+      ],
+      "recall": 1.0,
+      "noise_ratio": 0.6,
+      "passed": true
+    },
+    {
+      "id": "h5",
+      "category": "homelab",
+      "query": "DeepSeek Harness deployment Nexus CLI",
+      "scope": "homelab",
+      "expected_refs": [
+        "homelab:691",
+        "homelab:692"
+      ],
+      "found_refs": [
+        "homelab:691",
+        "homelab:692"
+      ],
+      "missed_refs": [],
+      "returned_refs": [
+        "homelab:691",
+        "homelab:692",
+        "homelab:622",
+        "homelab:703",
+        "homelab:100"
+      ],
+      "noise_refs": [
+        "homelab:622",
+        "homelab:703",
+        "homelab:100"
+      ],
+      "recall": 1.0,
+      "noise_ratio": 0.6,
+      "passed": true
+    },
+    {
+      "id": "h6",
+      "category": "homelab",
+      "query": "Claude Remote Control security mobile access Nexus",
+      "scope": "homelab",
+      "expected_refs": [
+        "homelab:520"
+      ],
+      "found_refs": [
+        "homelab:520"
+      ],
+      "missed_refs": [],
+      "returned_refs": [
+        "homelab:648",
+        "homelab:520",
+        "homelab:703",
+        "homelab:586",
+        "homelab:416"
+      ],
+      "noise_refs": [
+        "homelab:648",
+        "homelab:703",
+        "homelab:586",
+        "homelab:416"
+      ],
+      "recall": 1.0,
+      "noise_ratio": 0.8,
+      "passed": true
+    },
+    {
+      "id": "a1",
+      "category": "ai",
+      "query": "fine-tuning LLM tech debt calcification vs prompting skills",
+      "scope": "ai",
+      "expected_refs": [
+        "ai:176"
+      ],
+      "found_refs": [
+        "ai:176"
+      ],
+      "missed_refs": [],
+      "returned_refs": [
+        "ai:176",
+        "ai:28"
+      ],
+      "noise_refs": [
+        "ai:28"
+      ],
+      "recall": 1.0,
+      "noise_ratio": 0.5,
+      "passed": true
+    },
+    {
+      "id": "a2",
+      "category": "ai",
+      "query": "agent memory architecture complete design",
+      "scope": "ai",
+      "expected_refs": [
+        "ai:159"
+      ],
+      "found_refs": [
+        "ai:159"
+      ],
+      "missed_refs": [],
+      "returned_refs": [
+        "ai:159",
+        "ai:89"
+      ],
+      "noise_refs": [
+        "ai:89"
+      ],
+      "recall": 1.0,
+      "noise_ratio": 0.5,
+      "passed": true
+    },
+    {
+      "id": "a3",
+      "category": "ai",
+      "query": "MCP tools connecting AI agents APIs protocols",
+      "scope": "ai",
+      "expected_refs": [
+        "ai:160"
+      ],
+      "found_refs": [
+        "ai:160"
+      ],
+      "missed_refs": [],
+      "returned_refs": [
+        "ai:160",
+        "ai:55",
+        "ai:80",
+        "ai:81"
+      ],
+      "noise_refs": [
+        "ai:55",
+        "ai:80",
+        "ai:81"
+      ],
+      "recall": 1.0,
+      "noise_ratio": 0.75,
+      "passed": true
+    },
+    {
+      "id": "a4",
+      "category": "ai",
+      "query": "semantic blindness LLM sensor data industrial scale",
+      "scope": "ai",
+      "expected_refs": [
+        "ai:3"
+      ],
+      "found_refs": [
+        "ai:3"
+      ],
+      "missed_refs": [],
+      "returned_refs": [
+        "ai:3"
+      ],
+      "noise_refs": [],
+      "recall": 1.0,
+      "noise_ratio": 0.0,
+      "passed": true
+    },
+    {
+      "id": "a5",
+      "category": "ai",
+      "query": "automated code review AI kill the code review",
+      "scope": "ai",
+      "expected_refs": [
+        "ai:158"
+      ],
+      "found_refs": [
+        "ai:158"
+      ],
+      "missed_refs": [],
+      "returned_refs": [
+        "ai:158",
+        "ai:91",
+        "ai:66",
+        "ai:119"
+      ],
+      "noise_refs": [
+        "ai:91",
+        "ai:66",
+        "ai:119"
+      ],
+      "recall": 1.0,
+      "noise_ratio": 0.75,
+      "passed": true
+    },
+    {
+      "id": "a6",
+      "category": "ai",
+      "query": "ColBERT multi-vector embedding training sentence transformers",
+      "scope": "ai",
+      "expected_refs": [
+        "ai:179"
+      ],
+      "found_refs": [
+        "ai:179"
+      ],
+      "missed_refs": [],
+      "returned_refs": [
+        "ai:179"
+      ],
+      "noise_refs": [],
+      "recall": 1.0,
+      "noise_ratio": 0.0,
+      "passed": true
+    },
+    {
+      "id": "x1",
+      "category": "cross",
+      "query": "AI ingest pipeline gotcha configuration publish latency",
+      "scope": "both",
+      "expected_refs": [
+        "homelab:600",
+        "homelab:603",
+        "homelab:605"
+      ],
+      "found_refs": [
+        "homelab:600"
+      ],
+      "missed_refs": [
+        "homelab:603",
+        "homelab:605"
+      ],
+      "returned_refs": [
+        "homelab:600",
+        "homelab:449",
+        "homelab:565",
+        "homelab:728",
+        "homelab:727"
+      ],
+      "noise_refs": [
+        "homelab:449",
+        "homelab:565",
+        "homelab:728",
+        "homelab:727"
+      ],
+      "recall": 0.3333333333333333,
+      "noise_ratio": 0.8,
+      "passed": true
+    },
+    {
+      "id": "x2",
+      "category": "cross",
+      "query": "ColBERT retrieval KB homelab evaluation multi-vector",
+      "scope": "both",
+      "expected_refs": [
+        "ai:179",
+        "homelab:729"
+      ],
+      "found_refs": [
+        "ai:179",
+        "homelab:729"
+      ],
+      "missed_refs": [],
+      "returned_refs": [
+        "homelab:729",
+        "ai:179",
+        "homelab:668",
+        "homelab:591",
+        "homelab:666",
+        "homelab:718"
+      ],
+      "noise_refs": [
+        "homelab:668",
+        "homelab:591",
+        "homelab:666",
+        "homelab:718"
+      ],
+      "recall": 1.0,
+      "noise_ratio": 0.6666666666666666,
+      "passed": true
+    },
+    {
+      "id": "x3",
+      "category": "cross",
+      "query": "Qwen local model LM Studio Forrix endpoint",
+      "scope": "both",
+      "expected_refs": [
+        "homelab:670",
+        "homelab:671"
+      ],
+      "found_refs": [
+        "homelab:671"
+      ],
+      "missed_refs": [
+        "homelab:670"
+      ],
+      "returned_refs": [
+        "homelab:671",
+        "homelab:608",
+        "homelab:607",
+        "homelab:594",
+        "homelab:597"
+      ],
+      "noise_refs": [
+        "homelab:608",
+        "homelab:607",
+        "homelab:594",
+        "homelab:597"
+      ],
+      "recall": 0.5,
+      "noise_ratio": 0.8,
+      "passed": true
+    },
+    {
+      "id": "x4",
+      "category": "cross",
+      "query": "recursive language models RLM large codebases pattern",
+      "scope": "both",
+      "expected_refs": [
+        "ai:12"
+      ],
+      "found_refs": [
+        "ai:12"
+      ],
+      "missed_refs": [],
+      "returned_refs": [
+        "ai:12",
+        "homelab:373"
+      ],
+      "noise_refs": [
+        "homelab:373"
+      ],
+      "recall": 1.0,
+      "noise_ratio": 0.5,
+      "passed": true
+    },
+    {
+      "id": "b1",
+      "category": "bilingual",
+      "query": "kako radi Pi-hole blokiranje po IP adresi za specifičnog korisnika",
+      "scope": "homelab",
+      "expected_refs": [
+        "homelab:724",
+        "homelab:725"
+      ],
+      "found_refs": [
+        "homelab:724",
+        "homelab:725"
+      ],
+      "missed_refs": [],
+      "returned_refs": [
+        "homelab:724",
+        "homelab:725",
+        "homelab:726",
+        "homelab:300"
+      ],
+      "noise_refs": [
+        "homelab:726",
+        "homelab:300"
+      ],
+      "recall": 1.0,
+      "noise_ratio": 0.5,
+      "passed": true,
+      "bilingual_parity": 0.5,
+      "alt_refs": [
+        "homelab:724",
+        "homelab:725",
+        "homelab:726",
+        "homelab:141",
+        "homelab:140"
+      ]
+    },
+    {
+      "id": "b2",
+      "category": "bilingual",
+      "query": "kvantizacija i kompresija velikih jezičkih modela na edge uređajima",
+      "scope": "both",
+      "expected_refs": [
+        "homelab:563"
+      ],
+      "found_refs": [
+        "homelab:563"
+      ],
+      "missed_refs": [],
+      "returned_refs": [
+        "homelab:563",
+        "ai:136",
+        "ai:149",
+        "ai:134"
+      ],
+      "noise_refs": [
+        "ai:136",
+        "ai:149",
+        "ai:134"
+      ],
+      "recall": 1.0,
+      "noise_ratio": 0.75,
+      "passed": true,
+      "bilingual_parity": 0.2,
+      "alt_refs": [
+        "homelab:563",
+        "homelab:373"
+      ]
+    },
+    {
+      "id": "b3",
+      "category": "bilingual",
+      "query": "Agora application backup procedure to NAS daily",
+      "scope": "homelab",
+      "expected_refs": [
+        "homelab:722",
+        "homelab:723"
+      ],
+      "found_refs": [
+        "homelab:722",
+        "homelab:723"
+      ],
+      "missed_refs": [],
+      "returned_refs": [
+        "homelab:723",
+        "homelab:722",
+        "homelab:410",
+        "homelab:417",
+        "homelab:631"
+      ],
+      "noise_refs": [
+        "homelab:410",
+        "homelab:417",
+        "homelab:631"
+      ],
+      "recall": 1.0,
+      "noise_ratio": 0.6,
+      "passed": true,
+      "bilingual_parity": 0.4,
+      "alt_refs": [
+        "homelab:410",
+        "homelab:417"
+      ]
+    },
+    {
+      "id": "b4",
+      "category": "bilingual",
+      "query": "semantic blindness when LLM processes 500000 sensor names",
+      "scope": "ai",
+      "expected_refs": [
+        "ai:3"
+      ],
+      "found_refs": [
+        "ai:3"
+      ],
+      "missed_refs": [],
+      "returned_refs": [
+        "ai:3"
+      ],
+      "noise_refs": [],
+      "recall": 1.0,
+      "noise_ratio": 0.0,
+      "passed": true,
+      "bilingual_parity": 1.0,
+      "alt_refs": [
+        "ai:3"
+      ]
+    }
+  ]
+}

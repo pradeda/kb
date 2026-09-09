@@ -1,0 +1,19 @@
+# /opt/kb/docker-compose.yml
+# Pokretanje: docker compose up -d
+# ChromaDB: localhost-only (consumers are kb_search_api and compile.py on the host)
+
+services:
+  chromadb:
+    # Pinned (was :latest) — upgrade deliberately, not via watchtower;
+    # version changes can move the persist path/schema (see KB gotcha #396)
+    image: chromadb/chroma:1.0.0
+    container_name: kb-chromadb
+    volumes:
+      # Rust chroma (2025+) writes to /data and ignores PERSIST_DIRECTORY —
+      # mounting /chroma/chroma meant persistence NEVER actually worked
+      - ./chroma_data:/data
+    environment:
+      - ANONYMIZED_TELEMETRY=FALSE
+    ports:
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped

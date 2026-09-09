@@ -1,0 +1,107 @@
+[
+  {
+    "id": "rw-01",
+    "natural_query": "How is NAS connected to the rest of the network?",
+    "keyword_hint": "NAS network connection topology",
+    "category": "infrastructure",
+    "notes": "NAS regression pair from KB #811. Entry 385 (NFS ports) found by keyword but lost at candidate_k by natural query."
+  },
+  {
+    "id": "rw-02",
+    "natural_query": "What backup strategy do we use?",
+    "keyword_hint": "backup NAS strategy schedule",
+    "category": "infrastructure",
+    "notes": "Complete failure: natural returns 0 results, keyword returns 3."
+  },
+  {
+    "id": "rw-03",
+    "natural_query": "How do I add a new entry to the knowledge base?",
+    "keyword_hint": "KB add entry workflow",
+    "category": "kb-pipeline",
+    "notes": "Complete failure: natural returns 0, keyword returns 4."
+  },
+  {
+    "id": "rw-04",
+    "natural_query": "Why did the AI ingest produce low quality entries?",
+    "keyword_hint": "AI ingest quality relevance filter",
+    "category": "ai-ingest",
+    "notes": "Complete failure: natural returns 0, keyword returns 5."
+  },
+  {
+    "id": "rw-05",
+    "natural_query": "What caused the last KB search outage?",
+    "keyword_hint": "KB search outage power loss",
+    "category": "kb-pipeline",
+    "notes": "Natural returns 1, keyword returns 5. Severe recall loss."
+  },
+  {
+    "id": "rw-06",
+    "natural_query": "How do we monitor services on Nexus?",
+    "keyword_hint": "Nexus monitoring check-logs services",
+    "category": "infrastructure",
+    "notes": "Natural returns 3, keyword returns 5. Overlap=1."
+  },
+  {
+    "id": "rw-07",
+    "natural_query": "How does the reranker work in KB search?",
+    "keyword_hint": "KB reranker mMARCO cross-encoder",
+    "category": "kb-pipeline",
+    "notes": "Both return 5 but overlap=0. Completely different result sets."
+  },
+  {
+    "id": "rw-08",
+    "natural_query": "How does Pi-hole handle DNS for the network?",
+    "keyword_hint": "Pi-hole DNS configuration",
+    "category": "infrastructure",
+    "notes": "Moderate divergence: overlap=3 of 5."
+  },
+  {
+    "id": "rw-09",
+    "natural_query": "How is WireGuard configured on the Raspberry Pi?",
+    "keyword_hint": "WireGuard RPi4 configuration",
+    "category": "infrastructure",
+    "notes": "Moderate divergence: overlap=2 of 5."
+  },
+  {
+    "id": "rw-10",
+    "natural_query": "What models are available on Forrix for local inference?",
+    "keyword_hint": "Forrix LM Studio models Qwen",
+    "category": "infrastructure",
+    "notes": "Moderate divergence: overlap=2. Keyword finds AI corpus entries too."
+  },
+  {
+    "id": "rw-11",
+    "natural_query": "What is the ChromaDB embedding model we use?",
+    "keyword_hint": "ChromaDB nomic embedding model",
+    "category": "kb-pipeline",
+    "notes": "Moderate divergence: overlap=3 of 5."
+  },
+  {
+    "id": "rw-12",
+    "natural_query": "What happens when Docker containers lose NFS mounts?",
+    "keyword_hint": "Docker NFS mount failure",
+    "category": "infrastructure",
+    "notes": "CONTROL: natural works well here, overlap=5. Rewriting should not degrade."
+  },
+  {
+    "id": "rw-13",
+    "natural_query": "Kako se Plex povezuje sa NAS-om?",
+    "keyword_hint": "Plex NAS konfiguracija",
+    "category": "infrastructure",
+    "notes": "REVERSE: Serbian natural (2 results) beats Serbian keyword (0). Negative control for rewriting."
+  },
+  {
+    "id": "rw-14",
+    "natural_query": "What is the purpose of the corpus router in KB v2?",
+    "keyword_hint": "KB v2 corpus router auto routing",
+    "category": "kb-pipeline",
+    "notes": "Technical concept question — tests whether rewriting preserves architectural terms."
+  },
+  {
+    "id": "rw-15",
+    "natural_query": "How did we fix the HNSW blind window problem?",
+    "keyword_hint": "HNSW blind window full-scan bypass ChromaDB",
+    "category": "kb-pipeline",
+    "notes": "Tests preservation of specific technical term (HNSW blind window)."
+  }
+]

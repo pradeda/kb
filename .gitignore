@@ -1,0 +1,36 @@
+# Secrets
+.env
+
+# Database (built from raw notes via compile.py)
+kb.db
+kb.db-shm
+kb.db-wal
+
+# Vector store
+chroma_data/
+chroma/
+
+# Python environments
+venv*/
+__pycache__/
+
+# Model cache
+fastembed_cache/
+
+# Backup / rollback copies
+*.bak*
+*.pre-*
+
+# Raw notes (backed up to NAS separately)
+raw/
+
+# Generated wiki
+wiki/
+wiki.backup*/
+
+# Quarantine
+quarantine/
+quarantine.log*
+
+# Atlas generated output
+atlas/
