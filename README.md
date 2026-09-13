@@ -13,6 +13,7 @@ Homelab knowledge base search backend — Python API, MCP server, ChromaDB embed
 | FastEmbed daemon | `embed_daemon.py` | `/run/kb-embed/embed.sock` |
 | Compiler | `compile.py` | invoked by `kb-watcher` / `ai-kb-watcher` |
 | Corpus router | `corpus-router.yml` | config for search API |
+| KB Atlas | `kb_atlas.py` + `atlas_template.html` | `:3085` (user units `kb-atlas` / `kb-atlas-rebuild.timer`); source of truth in [kb-go](https://github.com/pradeda/kb-go) `runtime/`, deployed via `make install` |
 
 ## Retrieval pipeline
 
