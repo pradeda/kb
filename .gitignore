@@ -34,3 +34,4 @@ quarantine.log*
 
 # Atlas generated output
 atlas/
+hf_cache/

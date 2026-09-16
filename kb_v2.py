@@ -48,6 +48,9 @@ ROUTER_CONFIG_PATH = "/opt/kb/corpus-router.yml"
 PRECALIBRATION_ROUTER_VERSION = "corpus-router-v2-fts5-hybrid"
 HOMELAB_DECAY_HALF_LIFE = 540.0
 HOMELAB_DECAY_FLOOR = 0.30
+SUPERSEDE_DEMOTE = 0.1  # final_score multiplier for [SUPERSEDED] entries — demotes without
+                        # excluding (inclusion is decided pre-final_score, so an explicit history
+                        # search still surfaces the old entry, ranked at the bottom)
 EMBEDDING_MODEL = "nomic-ai/nomic-embed-text-v1.5"
 EMBEDDING_DIMENSION = 768
 COLLECTION_SCHEMA_VERSION = 1
@@ -1004,8 +1007,11 @@ def _admit_alternate_only_candidates(
 
 
 def _apply_decay(candidate: Candidate, router_config: RouterConfig) -> None:
+    # Superseded entries are demoted (not excluded): final_score only, so an explicit
+    # history search still surfaces them; inclusion is decided before final_score.
+    demote = SUPERSEDE_DEMOTE if (candidate.title or "").startswith("[SUPERSEDED]") else 1.0
     if candidate.corpus == "ai" and router_config.ai_decay_mode == "disabled":
-        candidate.final_score = candidate.relevance
+        candidate.final_score = round(candidate.relevance * demote, 4)
         return
     days_old = 0.0
     if candidate.date:
@@ -1025,7 +1031,7 @@ def _apply_decay(candidate: Candidate, router_config: RouterConfig) -> None:
         half_life = HOMELAB_DECAY_HALF_LIFE
         floor = HOMELAB_DECAY_FLOOR
     decay = max(1.0 / (1.0 + days_old / half_life), floor)
-    candidate.final_score = round(candidate.relevance * decay, 4)
+    candidate.final_score = round(candidate.relevance * decay * demote, 4)
 
 
 def _public_url(source: Optional[str]) -> Optional[str]:

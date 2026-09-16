@@ -6,6 +6,8 @@ import sqlite3, os, re, json, tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+import supersede_index  # supersede link index (same dir: /opt/kb)
+
 # --- configuration ---
 CORPUS_PROFILES = {
     "homelab": {
@@ -35,6 +37,30 @@ CORPUS_PROFILES = {
         "watcher_state": "/tmp/ai-kb-watcher-last",
     },
 }
+
+ISOLATION_VARS = ("KB_HOMELAB_DB", "KB_AI_DB", "KB_HOMELAB_RAW", "KB_AI_RAW")
+
+
+def _apply_isolation_env():
+    """All-or-nothing storage override, mirrored in corpus.go (isolationOverride).
+    If any var is set, ALL must be — an isolated run (tests, the Go entry-point
+    test) can never fall through to a production path. The Go binary and every
+    compile.py subprocess it spawns read the SAME four vars, so resolved paths
+    stay identical across the process boundary. Raw is overridden per corpus
+    because the corpora keep separate raw roots in production."""
+    present = {k: os.environ.get(k, "").strip() for k in ISOLATION_VARS}
+    if not any(present.values()):
+        return
+    missing = [k for k, v in present.items() if not v]
+    if missing:
+        raise SystemExit(
+            "incomplete KB isolation env: set all of "
+            f"{list(ISOLATION_VARS)} (missing {missing}); refusing production fallback")
+    CORPUS_PROFILES["homelab"]["db"] = present["KB_HOMELAB_DB"]
+    CORPUS_PROFILES["homelab"]["raw"] = present["KB_HOMELAB_RAW"]
+    CORPUS_PROFILES["ai"]["db"] = present["KB_AI_DB"]
+    CORPUS_PROFILES["ai"]["raw"] = present["KB_AI_RAW"]
+
 
 KB = DB = WIKI = RAW = ENV_FILE = None
 SECRET_PATTERNS_FILE = QUARANTINE_DIR = QUARANTINE_LOG = None
@@ -88,13 +114,20 @@ def parse_args(argv=None):
                           help="retire one entry from SQLite, FTS5, Chroma and raw storage")
     recovery.add_argument("--supersede", type=int, metavar="ID",
                           help="mark an existing entry as superseded and queue re-embedding")
+    recovery.add_argument("--rebuild-supersede-index", action="store_true",
+                          help="rebuild the supersede edge index from markers in all corpora")
+    recovery.add_argument("--history", metavar="CORPUS:ID",
+                          help="print the supersede lineage of one entry (predecessors + successors)")
     parser.add_argument("--replacement", metavar="REFS",
                         help="replacement KB references required by --supersede")
+    parser.add_argument("--json", action="store_true",
+                        help="machine-readable JSON output (with --history)")
     args = parser.parse_args(argv)
     if (args.supersede is None) != (args.replacement is None):
         parser.error("--supersede and --replacement must be used together")
     return args
 
+_apply_isolation_env()
 configure_corpus("homelab")
 
 def get_db():
@@ -217,20 +250,31 @@ def supersede_entry(entry_id, replacement, db_path=None):
             raise LookupError(f"entry {entry_id} not found in {target_db}")
         etype, content, title, tags, raw_value, created_at = row
         marker = f"SUPERSEDED — use {replacement}"
-        if content.startswith(marker):
+        marker_prefix = "SUPERSEDED — use "
+        first_line = content.split("\n", 1)[0]
+        if first_line == marker:
+            # exact same replacement set already recorded → no-op (idempotent)
             return {"entry_id": entry_id, "replacement": replacement, "already_superseded": True}
         if not raw_value:
             raise RuntimeError(f"entry {entry_id} has no raw_path; refusing partial update")
         raw_path = Path(raw_value)
         original_raw = raw_path.read_bytes()
-        new_title = title if title.startswith("[SUPERSEDED]") else f"[SUPERSEDED] {title}"
-        new_content = (
-            f"{marker}\n\n"
-            "The operational guidance below is historical and must not be followed. "
-            "Use the replacement records above for the current interpreter mapping.\n\n"
-            "--- Historical incident content ---\n\n"
-            f"{content}"
-        )
+        if first_line.startswith(marker_prefix):
+            # re-supersede to a DIFFERENT replacement: swap only the canonical
+            # (first) marker line, keeping the preserved history body intact — no
+            # second wrapper, no accumulated markers. Title is already [SUPERSEDED].
+            rest = content.split("\n", 1)[1] if "\n" in content else ""
+            new_title = title
+            new_content = f"{marker}\n{rest}"
+        else:
+            new_title = title if title.startswith("[SUPERSEDED]") else f"[SUPERSEDED] {title}"
+            new_content = (
+                f"{marker}\n\n"
+                "The operational guidance below is historical and must not be followed. "
+                "Use the replacement records above for the current interpreter mapping.\n\n"
+                "--- Historical incident content ---\n\n"
+                f"{content}"
+            )
         raw_text = (
             f"---\ntype: {etype}\n"
             f"title: {encode_frontmatter_value(new_title)}\n"
@@ -744,6 +788,15 @@ def check_health():
     }
     print(json.dumps(report, ensure_ascii=False, sort_keys=True))
 
+def _edges_db():
+    # single shared cross-corpus edge index lives in the homelab DB
+    return CORPUS_PROFILES["homelab"]["db"]
+
+
+def _db_paths():
+    return {name: prof["db"] for name, prof in CORPUS_PROFILES.items()}
+
+
 def main(argv=None):
     args = parse_args(argv)
     configure_corpus(args.corpus)
@@ -752,6 +805,26 @@ def main(argv=None):
 
     if args.health:
         check_health()
+        # read-only: report table↔marker drift + staleness, never repair here
+        mismatch = supersede_index.health_mismatch(_edges_db(), _db_paths())
+        print(json.dumps({"supersede_index": mismatch}, ensure_ascii=False, sort_keys=True))
+        return
+
+    if args.rebuild_supersede_index:
+        stats = supersede_index.rebuild_from_stores(_edges_db(), _db_paths())
+        print(json.dumps({"rebuild_supersede_index": stats}, ensure_ascii=False, sort_keys=True))
+        return
+
+    if args.history is not None:
+        m = supersede_index.REF_RE.match(args.history.strip())
+        if not m:
+            raise SystemExit(f"invalid --history {args.history!r}: expected corpus:id (e.g. homelab:940)")
+        start = (m.group(1), int(m.group(2)))
+        result = supersede_index.history_from_stores(_edges_db(), start, _db_paths())
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        else:
+            print(supersede_index.render_history_text(result))
         return
 
     if args.retire is not None:
@@ -760,13 +833,24 @@ def main(argv=None):
         return
 
     if args.supersede is not None:
-        supersede_report = supersede_entry(args.supersede, args.replacement)
+        # validate BEFORE marking so a rejected supersede never touches the entry
+        src = (args.corpus, args.supersede)
+        refs, malformed = supersede_index.parse_canonical(f"SUPERSEDED — use {args.replacement}")
+        if malformed or not refs:
+            raise SystemExit(f"invalid --replacement {args.replacement!r}: expected corpus:id[, corpus:id]")
+        errs = supersede_index.validate_supersede(_edges_db(), src, refs, _db_paths())
+        if errs:
+            raise SystemExit("supersede rejected: " + "; ".join(errs))
+        supersede_report = supersede_entry(args.supersede, args.replacement)  # marker
+        supersede_index.apply_supersede_edges(_edges_db(), src, refs)          # replace edge set
 
     if args.recover_db:
         recover_db_from_raw()
+        supersede_index.mark_stale_from_recovery(_edges_db())  # entries changed under the index
         return
     if args.recover_raw:
         recover_raw_from_db()
+        supersede_index.mark_stale_from_recovery(_edges_db())
         return
 
     embed_failed = 0

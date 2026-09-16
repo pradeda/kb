@@ -186,6 +186,66 @@ def add(content: str, title: str, tag: str) -> str:
     return result.stdout or result.stderr or "Added successfully."
 
 
+@mcp.tool(
+    description=(
+        "Mark an existing KB entry as superseded because a newer entry replaces a "
+        "current-state fact it asserts that is no longer true (e.g. a changed domain, "
+        "port, path, threshold, or a corrected diagnosis). "
+        "Use ONLY when the old entry would mislead if retrieved today — NOT for adding "
+        "history or a different aspect of the same topic (those should coexist as normal "
+        "add). First find the old entry via semantic_search, then add the corrective "
+        "entry, then call this with its reference. entry_id is the obsolete entry's numeric "
+        "id; replacement is the KB reference(s) of the current entry, e.g. 'homelab:323'. "
+        "The old entry keeps its id and history, its title is prefixed [SUPERSEDED], and it "
+        "is demoted in search. Refuses if entry_id does not exist."
+    )
+)
+def supersede(entry_id: int, replacement: str) -> str:
+    try:
+        result = subprocess.run(
+            ["/usr/local/bin/kb", "supersede", str(entry_id), replacement],
+            input="",  # pipe stdin -> non-interactive (no y/N prompt); never blocks
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        return "KB supersede timed out — check kb-embed/SQLite (WAL lock?)."
+    if result.returncode != 0:
+        return f"KB supersede failed: {result.stderr or result.stdout}".strip()
+    return result.stdout or result.stderr or "Superseded successfully."
+
+
+@mcp.tool(
+    description=(
+        "Show the supersede lineage of one KB entry: every explicitly linked "
+        "predecessor and successor, in a single call, with no LLM or vector lookup. "
+        "Use when prior versions of a fact matter — to see what an entry replaced or "
+        "what replaced it, or to trace a chain of corrections. reference is a full "
+        "'corpus:id' (e.g. 'homelab:940'); traversal is cross-corpus. Returns JSON "
+        "with nodes, edges, an ordered 'chain' (oldest→newest, or null when the "
+        "lineage branches/merges), and a 'completeness' field. Heed it: 'partial' "
+        "with warnings/broken_links/truncated means the answer is NOT the whole "
+        "history (a stale index needs 'kb rebuild-supersede-index'; a broken link "
+        "means a linked entry was retired)."
+    )
+)
+def history(reference: str) -> str:
+    try:
+        result = subprocess.run(
+            ["/usr/local/bin/kb", "history", reference],
+            input="",  # pipe stdin/stdout -> non-interactive, JSON output
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except subprocess.TimeoutExpired:
+        return "KB history timed out — check SQLite (WAL lock?)."
+    if result.returncode != 0:
+        return f"KB history failed: {result.stderr or result.stdout}".strip()
+    return result.stdout or result.stderr or "No history."
+
+
 if __name__ == "__main__":
     if "--sse" in sys.argv:
         mcp.run(transport="sse")
