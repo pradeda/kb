@@ -167,15 +167,21 @@ def corpus_search(
 
 @mcp.tool(
     description=(
-        "Add a note to the homelab knowledge base. "
-        "Use for documenting solutions, gotchas, config changes, or any homelab knowledge worth preserving. "
+        "Add a note to a knowledge base corpus. Defaults to the homelab corpus; "
+        "pass corpus='ai' to write to the AI research corpus instead. "
+        "Use for documenting solutions, gotchas, config changes, or any knowledge worth preserving. "
         "Content is passed via stdin to support multi-line text safely."
     )
 )
-def add(content: str, title: str, tag: str) -> str:
+def add(
+    content: str,
+    title: str,
+    tag: str,
+    corpus: Literal["homelab", "ai"] = "homelab",
+) -> str:
     try:
         result = subprocess.run(
-            ["/usr/local/bin/kb", "add", "note", "-", title, tag],
+            ["/usr/local/bin/kb", "add", "--corpus", corpus, "note", "-", title, tag],
             input=content,
             capture_output=True,
             text=True,
@@ -183,6 +189,8 @@ def add(content: str, title: str, tag: str) -> str:
         )
     except subprocess.TimeoutExpired:
         return "KB add timed out — check kb-embed/SQLite (WAL lock?)."
+    if result.returncode != 0:
+        return f"KB add failed: {result.stderr or result.stdout}".strip()
     return result.stdout or result.stderr or "Added successfully."
 
 
