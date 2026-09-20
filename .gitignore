@@ -35,3 +35,6 @@ quarantine.log*
 # Atlas generated output
 atlas/
 hf_cache/
+
+# Stray corpus DB created when kb runs from the repo root
+ai-kb.db
