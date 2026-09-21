@@ -32,10 +32,14 @@ import tempfile
 import unittest
 
 # Resolve compile.py relative to this file, same rule as test_retire_orphan.py:
-# a sibling copy wins (used to exercise a candidate before deployment), else the
-# deployed parent directory.
+# a candidate copy beside the test wins (used to exercise a change before
+# deployment), then the kb-go repo layout, then the deployed /opt/kb tree.
 _HERE = pathlib.Path(__file__).resolve().parent
-for _candidate in (_HERE / "compile.py", _HERE.parent / "compile.py"):
+for _candidate in (
+    _HERE / "compile.py",
+    _HERE.parent / "runtime" / "compile.py",
+    _HERE.parent / "compile.py",
+):
     if _candidate.exists():
         MODULE_PATH = _candidate
         break
@@ -56,9 +60,10 @@ for _var, _sub in (
     os.environ.setdefault(_var, str(_TMPROOT / _sub))
 
 # compile.py imports its sibling supersede_index, and the module under test may
-# be a candidate copy in this directory rather than the deployed parent, so both
-# directories go on the path.
-for _path in (str(_HERE.parent), str(_HERE), str(MODULE_PATH.parent)):
+# be a candidate copy in this directory rather than the deployed parent, so every
+# plausible directory goes on the path.
+for _path in (str(MODULE_PATH.parent), str(_HERE.parent / "runtime"),
+              str(_HERE.parent), str(_HERE)):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 

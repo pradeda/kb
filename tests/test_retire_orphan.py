@@ -15,12 +15,17 @@ import tempfile
 import unittest
 
 # Resolve compile.py relative to this file so the test always exercises the copy
-# it ships with: a sibling in the kb-go repo, the parent directory under
-# /opt/kb/tests. A hardcoded "/opt/kb" would make the repo test the deployed
-# file instead, so a stale repo copy would still pass — the exact drift that let
-# the orphan fix live only in production until 2026-08-12.
+# it ships with, in every layout: a candidate copy beside the test (used to
+# exercise a change before deployment), the kb-go repo (runtime/compile.py), and
+# the deployed /opt/kb tree. A hardcoded "/opt/kb" would make the repo test the
+# deployed file instead, so a stale repo copy would still pass — the exact drift
+# that let the orphan fix live only in production until 2026-08-12.
 _HERE = pathlib.Path(__file__).resolve().parent
-for _candidate in (_HERE / "compile.py", _HERE.parent / "compile.py"):
+for _candidate in (
+    _HERE / "compile.py",
+    _HERE.parent / "runtime" / "compile.py",
+    _HERE.parent / "compile.py",
+):
     if _candidate.exists():
         MODULE_PATH = _candidate
         break
@@ -28,10 +33,11 @@ else:
     raise RuntimeError(f"compile.py not found next to or above {_HERE}")
 
 # compile.py imports its sibling supersede_index, and the module under test may
-# be a candidate copy in this directory rather than the deployed parent, so both
-# directories go on the path. Without this the documented invocation
+# be a candidate copy in this directory rather than the deployed parent, so every
+# plausible directory goes on the path. Without this the documented invocation
 # (`python3 /opt/kb/tests/test_retire_orphan.py`) dies on ModuleNotFoundError.
-for _path in (str(_HERE.parent), str(_HERE), str(MODULE_PATH.parent)):
+for _path in (str(MODULE_PATH.parent), str(_HERE.parent / "runtime"),
+              str(_HERE.parent), str(_HERE)):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 
