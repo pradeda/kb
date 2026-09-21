@@ -15,6 +15,27 @@ Homelab knowledge base search backend — Python API, MCP server, ChromaDB embed
 | Corpus router | `corpus-router.yml` | config for search API |
 | KB Atlas | `kb_atlas.py` + `atlas_template.html` | `:3085` (user units `kb-atlas` / `kb-atlas-rebuild.timer`); source of truth in [kb-go](https://github.com/pradeda/kb-go) `runtime/`, deployed via `make install` |
 
+## Which files are owned here, and which are installed from kb-go
+
+This tree is the live deployment, not the source of truth for everything in it.
+Nine artifacts are **installed from [kb-go](https://github.com/pradeda/kb-go)** by
+`make install` in that repo (`DEPLOY_MANIFEST` is the authoritative list):
+
+`compile.py` · `watcher.sh` · `refresh_volatile.sh` · `supersede_index.py` ·
+`embed_daemon.py` · `kb_atlas.py` · `atlas_template.html` · `secret_patterns.json`
+(→ `/opt/kb/`), and `kb-health-check.sh` (→ `/home/turok/scripts/`).
+
+Editing one of those here is overwritten by the next `make install`, and
+`make verify-installed` in kb-go reports `DRIFT` until then. A fix must land in
+kb-go `runtime/` (or `config/`) in the same session; the deployed tree is what
+must be verified live first, because services read `/opt/kb`.
+
+Everything else in this tree is canonical **here** and has no kb-go counterpart:
+`kb_v2.py`, `kb_search_api.py`, `mcp_server.py`, `gate.py`, `index_gemini.py`,
+`docker-compose.yml`, `corpus-router.yml`, `v2-clients.yml`, `eval/`, `setup/`,
+`prompts/`, `mkdocs.yml`. `tests/` is mirrored in both repos and is run there by
+`make test`.
+
 ## Retrieval pipeline
 
 ```
