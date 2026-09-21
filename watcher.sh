@@ -44,14 +44,18 @@ fi
 
 min_interval=5
 
+# NOTE: compile.py owns the per-corpus lock (acquire_compile_lock, keyed on the
+# same "$lock" path). This script must NOT take a shell-level flock around the
+# call: flock binds to the open file description, so a parent holding it while
+# the child locks the same path deadlocks — the child waits forever and the
+# service still reads `active`. The loop below only does debounce bookkeeping;
+# mutual exclusion between a pass and a concurrent `kb retire` is compile.py's.
+
 # Prolaz pri startu: inotify je jedini okidac, pa unos koji je usao dok je
 # watcher bio ugasen ne bi bio embedovan sve dok neki nevezan add ne probudi
 # petlju. Ponedeljni reboot u 04:30 je tacno taj slucaj.
-(
-    flock 200
-    date +%s > "$state"
-    "${compile[@]}"
-) 200>"$lock"
+date +%s > "$state"
+"${compile[@]}"
 
 inotifywait -m -r -e close_write -e moved_to --format "%w%f" "$rawdir" 2>/dev/null |
 while read -r filepath; do
@@ -64,9 +68,6 @@ while read -r filepath; do
         sleep $(( min_interval - elapsed ))
     fi
 
-    (
-        flock 200
-        date +%s > "$state"
-        "${compile[@]}"
-    ) 200>"$lock"
+    date +%s > "$state"
+    "${compile[@]}"
 done

@@ -2,6 +2,7 @@
 # /opt/kb/compile.py
 
 import argparse
+import fcntl
 import sqlite3, os, re, json, tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -132,6 +133,80 @@ configure_corpus("homelab")
 
 def get_db():
     return sqlite3.connect(str(DB))
+
+
+# --- per-corpus mutating lock ------------------------------------------------
+# This lock lives here, not in watcher.sh, because compile.py is invoked by
+# several writers: watcher.sh (both corpora), the `kb` Go CLI (add/retire/
+# supersede/rebuild), /home/turok/scripts/kb-health-check.sh and
+# refresh_volatile.sh. Only the process that performs the mutation can guarantee
+# the SQLite/Chroma ordering, so every mutating run serializes itself here.
+#
+# watcher.sh deliberately does NOT take a shell-level flock any more. flock is
+# bound to the open file description, not to the process, so a parent holding
+# the lock while its child calls flock() on the same path deadlocks: the child
+# blocks forever and the service still looks `active`. Moving ownership into the
+# child is what makes retire/pass mutual exclusion possible at all.
+#
+# The lock is held until the process exits; release_compile_lock() exists for
+# in-process callers (tests) that run main() more than once.
+_compile_lock_fd = None
+
+
+def compile_lock_path(profile_name=None):
+    name = profile_name or ACTIVE_CORPUS
+    return Path(CORPUS_PROFILES[name]["watcher_lock"])
+
+
+def acquire_compile_lock(path=None):
+    """Take the blocking per-corpus lock and keep it for this process.
+
+    Read-only modes (--health, --history) must not call this: the 02:15 health
+    timer would otherwise queue behind a long embedding pass.
+    """
+    global _compile_lock_fd
+    if _compile_lock_fd is not None:
+        # Same process asking twice: a second open() would block on our own
+        # lock (different file description), so treat it as already held.
+        return _compile_lock_fd
+    target = Path(path) if path else compile_lock_path()
+    try:
+        fd = os.open(str(target), os.O_CREAT | os.O_RDWR, 0o666)
+    except PermissionError:
+        # Lock file created by another user; flock needs no write access.
+        fd = os.open(str(target), os.O_RDONLY)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print(f"[lock] another pass holds {target}; waiting for it to finish", flush=True)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+    _compile_lock_fd = fd
+    return fd
+
+
+def release_compile_lock():
+    global _compile_lock_fd
+    if _compile_lock_fd is None:
+        return
+    try:
+        fcntl.flock(_compile_lock_fd, fcntl.LOCK_UN)
+    finally:
+        os.close(_compile_lock_fd)
+        _compile_lock_fd = None
+
+
+def is_mutating_run(args):
+    """--health and --history only read; every other mode writes a layer."""
+    return not (args.health or args.history is not None)
+
+
+def lock_profile_name(args):
+    """Corpus whose lock a run must hold. The supersede edge index lives in the
+    homelab DB regardless of --corpus, so its rebuild takes the homelab lock."""
+    if args.rebuild_supersede_index:
+        return "homelab"
+    return ACTIVE_CORPUS
+
 
 def retire_entry(entry_id, collection=None, db_path=None):
     """Povuci jedan unos iz aktivnog corpusa kroz sva četiri sloja.
@@ -327,12 +402,29 @@ def get_unembedded():
 
 
 def mark_embedded(ids):
+    """Stamp embedded_at and report the ids whose row vanished before the stamp.
+
+    The UPDATE cannot fail loudly: a row deleted between the pass snapshot
+    (get_unembedded) and this stamp simply matches nothing, and a silently
+    zero-row UPDATE is exactly how the 2026-09-20 retire/pass race left an
+    orphan vector with no error printed anywhere (see homelab:1003). Returning
+    the difference lets the caller delete the vectors it just wrote for rows
+    that no longer exist.
+    """
+    ids = [str(i) for i in ids]
+    if not ids:
+        return []
     db = get_db()
-    ph = ",".join("?" * len(ids))
-    db.execute(f"UPDATE entries SET embedded_at=? WHERE id IN ({ph})",
-               [datetime.now().isoformat()] + list(ids))
-    db.commit()
-    db.close()
+    try:
+        ph = ",".join("?" * len(ids))
+        db.execute(f"UPDATE entries SET embedded_at=? WHERE id IN ({ph})",
+                   [datetime.now().isoformat()] + ids)
+        db.commit()
+        present = {str(row[0]) for row in
+                   db.execute(f"SELECT id FROM entries WHERE id IN ({ph})", ids)}
+    finally:
+        db.close()
+    return [i for i in ids if i not in present]
 
 def record_compile_run():
     """Stamp the end of a compile pass, including a pass that had nothing to do.
@@ -472,6 +564,29 @@ def embed_entries(entries):
         import sys
         print("ERROR: some entries failed to embed", file=sys.stderr)
     return successful_ids, failed
+
+
+def prune_orphan_vectors(ids):
+    """Delete vectors whose SQLite row disappeared during the pass.
+
+    Defence in depth for the race the mutating lock now prevents: whoever
+    removes a row between get_unembedded() and the Chroma upsert (a concurrent
+    retire, a manual DELETE, a future code path) leaves a vector that
+    check_health() reports as an orphan and the next 02:15 alarm pages on.
+    Deleting it here turns an invisible inconsistency into a log line.
+    """
+    ids = [str(i) for i in ids]
+    if not ids:
+        return []
+    collection = get_chroma_collection()
+    collection.delete(ids=ids)
+    survivors = collection.get(ids=ids, include=[]).get("ids") or []
+    if survivors:
+        print(f"  [WARN] could not remove orphan vector(s): {', '.join(survivors)}")
+    removed = [i for i in ids if i not in survivors]
+    print(f"  [CLEAN] removed {len(removed)} vector(s) whose row was deleted "
+          f"mid-pass: {', '.join('#' + i for i in removed)}")
+    return removed
 
 
 def recover_db_from_raw():
@@ -803,6 +918,12 @@ def main(argv=None):
     load_profile_env()
     supersede_report = None
 
+    # Serialize every mutating mode against the other writers of this corpus
+    # (watcher pass, kb CLI, refresh_volatile.sh). --health/--history stay
+    # lock-free so the 02:15 timer never queues behind a long embedding pass.
+    if is_mutating_run(args):
+        acquire_compile_lock(compile_lock_path(lock_profile_name(args)))
+
     if args.health:
         check_health()
         # read-only: report table↔marker drift + staleness, never repair here
@@ -859,7 +980,9 @@ def main(argv=None):
         unembedded = sanitize_unembedded(unembedded)
         embedded_ids, embed_failed = embed_entries(unembedded)
         if embedded_ids:
-            mark_embedded(embedded_ids)
+            vanished = mark_embedded(embedded_ids)
+            if vanished:
+                prune_orphan_vectors(vanished)
     if supersede_report is not None:
         print(json.dumps(supersede_report, ensure_ascii=False, sort_keys=True))
 
