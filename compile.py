@@ -3,6 +3,8 @@
 
 import argparse
 import fcntl
+import sys
+import time
 import sqlite3, os, re, json, tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -151,6 +153,16 @@ def get_db():
 # The lock is held until the process exits; release_compile_lock() exists for
 # in-process callers (tests) that run main() more than once.
 _compile_lock_fd = None
+_health_lock_fd = None
+
+# --health takes the READ side of the same lock, non-blocking with this budget.
+# Bounded on purpose: a long embedding pass must not stall the 02:15 timer, and
+# a corpus that stays busy is reported as its own outcome (exit 3) instead of
+# being mistaken for a fault. Overridable so an operator (or a test) can shorten
+# the wait without editing this file.
+HEALTH_BUSY_EXIT = 3
+HEALTH_LOCK_TIMEOUT = float(os.environ.get("KB_HEALTH_LOCK_TIMEOUT", "60"))
+HEALTH_LOCK_POLL = 0.25
 
 
 def compile_lock_path(profile_name=None):
@@ -185,7 +197,13 @@ def acquire_compile_lock(path=None):
 
 
 def release_compile_lock():
-    global _compile_lock_fd
+    global _compile_lock_fd, _health_lock_fd
+    if _health_lock_fd is not None:
+        try:
+            fcntl.flock(_health_lock_fd, fcntl.LOCK_UN)
+        finally:
+            os.close(_health_lock_fd)
+            _health_lock_fd = None
     if _compile_lock_fd is None:
         return
     try:
@@ -193,6 +211,45 @@ def release_compile_lock():
     finally:
         os.close(_compile_lock_fd)
         _compile_lock_fd = None
+
+
+def acquire_shared_health_lock(path=None, timeout=None):
+    """Take the read side of the corpus lock, bounded. Returns fd, or None if busy.
+
+    --health must never observe a mutation in progress. retire_entry() deletes
+    the Chroma vector and the SQLite row in separate steps, so a reader landing
+    between them sees the id in `embedded_ids` but not in `chroma_ids` and
+    reports a temporary `missing` vector — a false alarm on a corpus that is
+    fine, which is exactly what the 02:15 Telegram alert must not do.
+
+    Every mutating run holds LOCK_EX for its whole pass, so LOCK_SH is enough to
+    guarantee a settled snapshot, and several health readers may coexist.
+    Non-blocking with a deadline rather than a blocking wait: a long embedding
+    pass must not stall the timer. On timeout the caller reports the distinct
+    "busy" outcome (HEALTH_BUSY_EXIT) which the wrapper logs without alarming.
+    """
+    global _health_lock_fd
+    if _health_lock_fd is not None:
+        return _health_lock_fd
+    target = Path(path) if path else compile_lock_path()
+    budget = HEALTH_LOCK_TIMEOUT if timeout is None else timeout
+    deadline = time.monotonic() + budget
+    while True:
+        try:
+            fd = os.open(str(target), os.O_CREAT | os.O_RDWR, 0o666)
+        except PermissionError:
+            # Lock file created by another user; flock needs no write access.
+            fd = os.open(str(target), os.O_RDONLY)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(HEALTH_LOCK_POLL)
+            continue
+        _health_lock_fd = fd
+        return fd
 
 
 def is_mutating_run(args):
@@ -561,7 +618,6 @@ def embed_entries(entries):
 
     print(f"\nEmbed summary: {len(successful_ids)} succeeded, {failed} failed out of {total}")
     if failed:
-        import sys
         print("ERROR: some entries failed to embed", file=sys.stderr)
     return successful_ids, failed
 
@@ -919,17 +975,25 @@ def main(argv=None):
     supersede_report = None
 
     # Serialize every mutating mode against the other writers of this corpus
-    # (watcher pass, kb CLI, refresh_volatile.sh). --health/--history stay
-    # lock-free so the 02:15 timer never queues behind a long embedding pass.
+    # (watcher pass, kb CLI, refresh_volatile.sh). --health takes the read side
+    # of the same lock instead (see acquire_shared_health_lock), and --history
+    # takes nothing: neither may queue behind a long embedding pass.
     if is_mutating_run(args):
         acquire_compile_lock(compile_lock_path(lock_profile_name(args)))
 
     if args.health:
+        lock_path = compile_lock_path(lock_profile_name(args))
+        if acquire_shared_health_lock(lock_path) is None:
+            # Stable machine contract for the wrapper: exit 3 + {"status":"busy"}.
+            # Not a fault — a mutating run held the lock for the whole budget.
+            print(json.dumps({"status": "busy", "corpus": ACTIVE_CORPUS,
+                              "lock": str(lock_path)}, ensure_ascii=False, sort_keys=True))
+            return HEALTH_BUSY_EXIT
         check_health()
         # read-only: report table↔marker drift + staleness, never repair here
         mismatch = supersede_index.health_mismatch(_edges_db(), _db_paths())
         print(json.dumps({"supersede_index": mismatch}, ensure_ascii=False, sort_keys=True))
-        return
+        return 0
 
     if args.rebuild_supersede_index:
         stats = supersede_index.rebuild_from_stores(_edges_db(), _db_paths())
@@ -992,4 +1056,6 @@ def main(argv=None):
         raise SystemExit(1)
 
 if __name__ == "__main__":
-    main()
+    # main() returns an int only for the --health busy contract (exit 3); every
+    # other path exits through SystemExit or falls off the end as success.
+    sys.exit(main() or 0)

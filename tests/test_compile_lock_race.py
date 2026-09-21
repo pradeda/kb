@@ -22,13 +22,18 @@ paths, so a bug here cannot reach /opt/kb/kb.db or kb_collection.
 
 Run from /opt/kb:  /opt/kb/venv-embed/bin/python /opt/kb/tests/test_compile_lock_race.py
 """
+import contextlib
 import fcntl
 import importlib.util
+import io
+import json
 import os
 import pathlib
 import sqlite3
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 # Resolve compile.py relative to this file, same rule as test_retire_orphan.py:
@@ -284,14 +289,41 @@ class MutatingLockTests(CompileLockTestCase):
             self.assertTrue(kbcompile.is_mutating_run(kbcompile.parse_args(argv)),
                             f"{argv} must take the mutating lock")
 
-    def test_health_takes_no_lock(self):
-        """The 02:15 timer must not queue behind an embedding pass."""
+    def test_health_takes_the_shared_lock_not_the_exclusive_one(self):
+        """--health must observe a settled corpus without queueing behind a pass."""
         self._patch("acquire_compile_lock", lambda *a, **k: self.fail(
-            "read-only --health took the mutating lock"))
+            "read-only --health took the exclusive mutating lock"))
+        shared_calls = []
+
+        def fake_shared(path=None, timeout=None):
+            shared_calls.append(str(path))
+            return os.open(str(self.lock_path), os.O_CREAT | os.O_RDWR)
+
+        self._patch("acquire_shared_health_lock", fake_shared)
         self._patch("check_health", lambda: None)
         self._patch_attr(kbcompile.supersede_index, "health_mismatch", lambda *a, **k: {})
 
-        kbcompile.main(["--health"])
+        rc = kbcompile.main(["--health"])
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(shared_calls, [str(self.lock_path)])
+
+    def test_health_reports_busy_when_a_mutating_run_holds_the_lock(self):
+        """A held exclusive lock must yield exit 3 + {"status":"busy"}, not a FAIL."""
+        kbcompile.acquire_compile_lock(self.lock_path)          # exclusive, held
+        self._patch("HEALTH_LOCK_TIMEOUT", 0.1)                 # do not wait 60s
+        self._patch("check_health", lambda: self.fail(
+            "check_health ran while a mutating run held the lock"))
+
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            rc = kbcompile.main(["--health"])
+
+        self.assertEqual(rc, kbcompile.HEALTH_BUSY_EXIT)
+        self.assertEqual(rc, 3, "the busy contract is exit 3")
+        payload = json.loads(buffer.getvalue().strip())
+        self.assertEqual(payload["status"], "busy")
+        self.assertEqual(payload["lock"], str(self.lock_path))
 
     def test_rebuild_supersede_index_locks_the_homelab_corpus(self):
         """The edge index lives in the homelab DB whatever --corpus says."""
@@ -322,6 +354,99 @@ class MarkEmbeddedTests(CompileLockTestCase):
             "SELECT embedded_at FROM entries WHERE id=1").fetchone()[0]
         connection.close()
         self.assertIsNotNone(embedded, "surviving row was not stamped")
+
+
+CHILD_LOCK_SCRIPT = '''\
+import pathlib, sys, time
+
+module_dir, mode, lock, signals = sys.argv[1:5]
+sys.path.insert(0, module_dir)
+import compile as kbcompile
+
+signals = pathlib.Path(signals)
+
+
+def wait_for(name, timeout=30.0):
+    target = signals / name
+    deadline = time.monotonic() + timeout
+    while not target.exists():
+        if time.monotonic() >= deadline:
+            sys.exit(f"timeout waiting for {name}")
+        time.sleep(0.02)
+
+
+if mode == "hold":
+    kbcompile.acquire_compile_lock(lock)
+    (signals / "HOLDING").write_text("")
+    wait_for("RELEASE")
+else:
+    (signals / "ACQUIRING").write_text("")
+    kbcompile.acquire_compile_lock(lock)   # must block until the holder exits
+    (signals / "ACQUIRED").write_text("")
+'''
+
+
+class InterProcessLockTests(unittest.TestCase):
+    """Two real compile.py processes, real acquire_compile_lock, file handshake.
+
+    The in-process tests cover the same kernel semantics (flock is per open file
+    description, so a second fd in one process conflicts exactly like a second
+    process does), but this exercises the actual API across a process boundary
+    and the lock's lifetime: the holder never unlocks explicitly, so the lock
+    must be released by process exit.
+
+    No sleeps and no timing assertions: the holder only releases when the parent
+    creates the RELEASE file, which happens strictly after ACQUIRING is observed.
+    """
+
+    def setUp(self):
+        self.dir = pathlib.Path(tempfile.mkdtemp(prefix="ipc-", dir=_TMPROOT))
+        self.lock = self.dir / "kb-watcher.lock"
+        self.signals = self.dir / "signals"
+        self.signals.mkdir()
+        self.script = self.dir / "lock_child.py"
+        self.script.write_text(CHILD_LOCK_SCRIPT, encoding="utf-8")
+
+    def _spawn(self, mode):
+        return subprocess.Popen(
+            [sys.executable, str(self.script), str(MODULE_PATH.parent),
+             mode, str(self.lock), str(self.signals)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+
+    def _wait_for(self, name, timeout=30.0):
+        target = self.signals / name
+        deadline = time.monotonic() + timeout
+        while not target.exists():
+            if time.monotonic() >= deadline:
+                self.fail(f"timed out waiting for the child to write {name}")
+            time.sleep(0.02)
+
+    def test_second_process_waits_for_the_holder_to_exit(self):
+        holder = self._spawn("hold")
+        acquirer = None
+        try:
+            self._wait_for("HOLDING")
+            acquirer = self._spawn("acquire")
+            self._wait_for("ACQUIRING")
+            self.assertFalse(
+                (self.signals / "ACQUIRED").exists(),
+                "a second process acquired the lock while the first held it")
+            (self.signals / "RELEASE").write_text("")
+            self._wait_for("ACQUIRED")
+            _, err = acquirer.communicate(timeout=30)
+            self.assertEqual(acquirer.returncode, 0, err)
+        finally:
+            if acquirer is not None and acquirer.poll() is None:
+                acquirer.kill()
+            _, holder_err = holder.communicate(timeout=30)
+        self.assertEqual(holder.returncode, 0, holder_err)
+
+        # The holder exited without unlocking explicitly, so the lock must be
+        # free now — that is the process-lifetime guarantee retire relies on.
+        fd = kbcompile.acquire_compile_lock(self.lock)
+        self.assertIsNotNone(fd)
+        kbcompile.release_compile_lock()
 
 
 if __name__ == "__main__":
