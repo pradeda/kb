@@ -2,6 +2,7 @@
 # /opt/kb/compile.py
 
 import argparse
+import errno
 import fcntl
 import sys
 import time
@@ -170,6 +171,18 @@ def compile_lock_path(profile_name=None):
     return Path(CORPUS_PROFILES[name]["watcher_lock"])
 
 
+def _is_lock_contention(exc):
+    """True only for "someone else holds it", never for a broken lock.
+
+    flock reports contention as EAGAIN/EWOULDBLOCK. Everything else — EBADF,
+    EIO, ENOLCK, EINVAL — is a real failure and must propagate: treating it as
+    contention would make --health answer "busy" (exit 3, no alarm) for a lock
+    that cannot be taken at all, and would make a mutating run wait forever on
+    a blocking call that can never succeed.
+    """
+    return exc.errno in (errno.EAGAIN, errno.EWOULDBLOCK)
+
+
 def acquire_compile_lock(path=None):
     """Take the blocking per-corpus lock and keep it for this process.
 
@@ -189,11 +202,19 @@ def acquire_compile_lock(path=None):
         fd = os.open(str(target), os.O_RDONLY)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
+    except OSError as exc:
+        if not _is_lock_contention(exc):
+            os.close(fd)
+            raise
         print(f"[lock] another pass holds {target}; waiting for it to finish", flush=True)
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except OSError:
+            os.close(fd)
+            raise
     _compile_lock_fd = fd
     return fd
+
 
 
 def release_compile_lock():
@@ -242,8 +263,12 @@ def acquire_shared_health_lock(path=None, timeout=None):
             fd = os.open(str(target), os.O_RDONLY)
         try:
             fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
-        except OSError:
+        except OSError as exc:
             os.close(fd)
+            if not _is_lock_contention(exc):
+                # EBADF/EIO/ENOLCK/… must surface as a failure the wrapper
+                # alarms on, not as a normal "busy" that it deliberately skips.
+                raise
             if time.monotonic() >= deadline:
                 return None
             time.sleep(HEALTH_LOCK_POLL)

@@ -23,6 +23,7 @@ paths, so a bug here cannot reach /opt/kb/kb.db or kb_collection.
 Run from /opt/kb:  /opt/kb/venv-embed/bin/python /opt/kb/tests/test_compile_lock_race.py
 """
 import contextlib
+import errno
 import fcntl
 import importlib.util
 import io
@@ -35,6 +36,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 
 # Resolve compile.py relative to this file, same rule as test_retire_orphan.py:
 # a candidate copy beside the test wins (used to exercise a change before
@@ -324,6 +326,35 @@ class MutatingLockTests(CompileLockTestCase):
         payload = json.loads(buffer.getvalue().strip())
         self.assertEqual(payload["status"], "busy")
         self.assertEqual(payload["lock"], str(self.lock_path))
+
+    def test_real_lock_errors_propagate_instead_of_looking_busy(self):
+        """Only EAGAIN/EWOULDBLOCK is contention; anything else must fail loudly.
+
+        A broken lock (EBADF here) reported as "busy" would mean --health exits 3
+        and the wrapper deliberately stays silent — a lock that cannot be taken
+        at all would look like a healthy concurrent mutation.
+        """
+        self._patch("check_health", lambda: self.fail(
+            "check_health ran despite a broken lock"))
+        with mock.patch.object(kbcompile.fcntl, "flock",
+                               side_effect=OSError(errno.EBADF, "bad file descriptor")):
+            with self.assertRaises(OSError):
+                kbcompile.acquire_shared_health_lock(self.lock_path, timeout=0.1)
+            with self.assertRaises(OSError):
+                kbcompile.acquire_compile_lock(self.lock_path)
+
+        # And the same through main(): a broken lock is a failure, never exit 3.
+        with mock.patch.object(kbcompile.fcntl, "flock",
+                               side_effect=OSError(errno.EBADF, "bad file descriptor")):
+            with self.assertRaises(OSError):
+                kbcompile.main(["--health"])
+
+    def test_contention_is_still_reported_as_busy(self):
+        """The narrowed handler must not break the real busy path."""
+        kbcompile.acquire_compile_lock(self.lock_path)
+        self._patch("HEALTH_LOCK_TIMEOUT", 0.1)
+        self.assertIsNone(
+            kbcompile.acquire_shared_health_lock(self.lock_path, timeout=0.1))
 
     def test_rebuild_supersede_index_locks_the_homelab_corpus(self):
         """The edge index lives in the homelab DB whatever --corpus says."""
