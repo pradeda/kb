@@ -10,6 +10,7 @@ Run from /opt/kb:   python3 /opt/kb/tests/test_retire_orphan.py
 import importlib.util
 import pathlib
 import sqlite3
+import sys
 import tempfile
 import unittest
 
@@ -25,6 +26,14 @@ for _candidate in (_HERE / "compile.py", _HERE.parent / "compile.py"):
         break
 else:
     raise RuntimeError(f"compile.py not found next to or above {_HERE}")
+
+# compile.py imports its sibling supersede_index, and the module under test may
+# be a candidate copy in this directory rather than the deployed parent, so both
+# directories go on the path. Without this the documented invocation
+# (`python3 /opt/kb/tests/test_retire_orphan.py`) dies on ModuleNotFoundError.
+for _path in (str(_HERE.parent), str(_HERE), str(MODULE_PATH.parent)):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 
 SPEC = importlib.util.spec_from_file_location("kb_compile", MODULE_PATH)
 kbcompile = importlib.util.module_from_spec(SPEC)
