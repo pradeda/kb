@@ -11,7 +11,7 @@ Homelab knowledge base search backend — Python API, MCP server, ChromaDB embed
 | Search API (v2) | `kb_v2.py` via `kb_search_api.py` | `:8050` (user unit: `kb-search-api`) |
 | MCP server | `mcp_server.py` | system units `kb-mcp-sse` / `kb-mcp-http`; stdio clients |
 | FastEmbed daemon | `embed_daemon.py` | `/run/kb-embed/embed.sock` |
-| Compiler | `compile.py` | invoked by `kb-watcher` / `ai-kb-watcher` |
+| Compiler | `compile.py` | invoked by `kb-watcher` / `ai-kb-watcher`; owns the per-corpus mutating lock (`/tmp/kb-watcher.lock`, `/tmp/ai-kb-watcher.lock`) for every mutating mode — `watcher.sh` must not hold a shell `flock` on the same path, that deadlocks the child |
 | Corpus router | `corpus-router.yml` | config for search API |
 | KB Atlas | `kb_atlas.py` + `atlas_template.html` | `:3085` (user units `kb-atlas` / `kb-atlas-rebuild.timer`); source of truth in [kb-go](https://github.com/pradeda/kb-go) `runtime/`, deployed via `make install` |
 
