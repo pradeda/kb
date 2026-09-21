@@ -11,6 +11,20 @@ PY="${KB_REFRESH_PYTHON:-/opt/kb/venv-embed/bin/python}"
 COMPILE="${KB_REFRESH_COMPILE:-/opt/kb/compile.py}"
 ENV_FILE="${KB_REFRESH_ENV:-/opt/kb/.env}"
 
+# The same per-corpus lock compile.py takes for a pass (CORPUS_PROFILES[*]
+# ["watcher_lock"]). The UPDATE below sets embedded_at=NULL, so a watcher pass
+# running at the same time could embed the pre-refresh content and then stamp
+# embedded_at, leaving the refreshed text unembedded until the next cycle — or
+# the UPDATE could fail outright with "database is locked". Holding the lock for
+# the UPDATE closes both.
+#
+# The `"$PY" "$COMPILE"` call at the END of this script must stay OUTSIDE any
+# flock: compile.py takes this lock itself, and flock binds to the open file
+# description, so a parent holding it while the child locks the same path
+# deadlocks silently.
+LOCK="${KB_REFRESH_LOCK:-/tmp/kb-watcher.lock}"
+FLOCK="${KB_REFRESH_FLOCK:-/usr/bin/flock}"
+
 # shellcheck source=/dev/null
 [ -r "$ENV_FILE" ] && . "$ENV_FILE"
 
@@ -68,11 +82,13 @@ print(json.load(sys.stdin).get("data", "")[:4000])
 
     # This legacy job updates in place. sqlite quote() keeps arbitrary fetched
     # text out of SQL syntax; the entries_fts_update trigger refreshes FTS5.
+    # flock keeps a concurrent compile pass from embedding the stale text and
+    # stamping embedded_at over the NULL this UPDATE sets.
     Q_CONTENT=$(printf '%s' "$FRESH_CONTENT" | "$PY" -c \
         'import sqlite3,sys; print(sqlite3.connect(":memory:").execute("SELECT quote(?)", (sys.stdin.read(),)).fetchone()[0])')
     Q_TITLE=$(printf '%s' "$TITLE" | "$PY" -c \
         'import sqlite3,sys; print(sqlite3.connect(":memory:").execute("SELECT quote(?)", (sys.stdin.read(),)).fetchone()[0])')
-    "$SQLITE" "$DB" "
+    "$FLOCK" -w 120 "$LOCK" "$SQLITE" "$DB" "
         UPDATE entries SET
             content=$Q_CONTENT,
             title=$Q_TITLE,
