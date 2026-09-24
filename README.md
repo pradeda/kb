@@ -32,10 +32,41 @@ must be verified live first, because services read `/opt/kb`.
 
 Everything else in this tree is canonical **here** and has no kb-go counterpart:
 `kb_v2.py`, `kb_search_api.py`, `mcp_server.py`, `gate.py`, `index_gemini.py`,
-`docker-compose.yml`, `corpus-router.yml`, `v2-clients.yml`, `eval/`, `setup/`,
-`prompts/`, `mkdocs.yml`. `tests/` is mirrored in both repos and is run there by
-`make test`, except `tests/test_mcp_*.py`, which covers `mcp_server.py` and lives
-only here (run it with `/opt/kb/venv/bin/python3 -m unittest discover -s tests -p 'test_mcp_*.py'`).
+`docker-compose.yml`, `corpus-router.yml`, `v2-clients.yml`, `contracts/`, `eval/`,
+`setup/`, `prompts/`, `mkdocs.yml`. `tests/test_compile_lock_race.py` and
+`tests/test_retire_orphan.py` are mirrored in kb-go and run there by `make test`;
+the rest of `tests/` lives only here — see [Tests](#tests) for the interpreter each
+file needs.
+
+## Tests
+
+`tests/` holds the contract and regression suites. Run them from `/opt/kb`, because
+`import kb_v2` / `import kb_search_api` resolve against the repo root, and with the
+interpreter that actually has the test's dependencies — the venvs are isolated, so
+one interpreter does not run everything:
+
+| Interpreter | Files | What they pin |
+|---|---|---|
+| `/opt/kb/venv-search/bin/python3` | `test_v1_contract.py`, `test_v2_contract.py`, `test_nexus_synthesis.py`, `test_provision_v2.py` | v1 response and OpenAPI surface, the v2 routing/union/rerank/auth contract, Nexus synthesis prompt and provenance rules, `provision_v2.py` |
+| `/opt/kb/venv/bin/python3` | `test_mcp_*.py` | `mcp_server.py` tool names, transports, v2 payloads; `semantic_search`/`kb_get` shaping |
+| any (kb-go `make test` uses `/usr/bin/python3`) | `test_compile_lock_race.py`, `test_retire_orphan.py` | compile.py mutating lock, retire/pass race |
+
+```bash
+cd /opt/kb
+/opt/kb/venv-search/bin/python3 -m unittest tests.test_v1_contract tests.test_v2_contract \
+    tests.test_nexus_synthesis tests.test_provision_v2
+/opt/kb/venv/bin/python3 -m unittest discover -s tests -p 'test_mcp_*.py'
+/usr/bin/python3 -m unittest discover -s tests -p 'test_compile_lock_race.py'
+/usr/bin/python3 -m unittest discover -s tests -p 'test_retire_orphan.py'
+```
+
+Two deliberate test-side stubs keep the suite hermetic: the contract tests replace
+`kb_v2._build_fts5_index` (otherwise every `create_root_app` reads the live corpus
+databases and writes `/tmp/kb-fts5-*.db`), and
+`test_union_matches_versioned_eval_reference` is skipped unless `KB_EVAL_REFERENCE`
+points at `kb-eval/run_merged_bilingual_eval.py`, since kb-eval is a separate repo
+and not part of this deployment. `contracts/v2.openapi.json` is the frozen schema
+the v2 tests compare the generated OpenAPI against.
 
 ## Retrieval pipeline
 
