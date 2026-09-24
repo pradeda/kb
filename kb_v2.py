@@ -14,6 +14,7 @@ import os
 import re
 import sqlite3
 import stat
+import tempfile
 import time
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -58,6 +59,27 @@ ALTERNATE_ONLY_RANK_LIMIT = 5
 FTS5_FETCH_LIMIT = 100
 FTS5_TOKENIZER = "porter unicode61 remove_diacritics 2"
 FTS5_BM25_WEIGHTS = (0, 3, 2, 1)
+# Where the lexical index files live. The service builds them at startup and reads
+# them on every search, so the location is explicit at its entry point
+# (kb_search_api.__main__ passes DEFAULT_FTS5_DIR) and overridable with KB_FTS5_DIR
+# or create_v2_app(fts5_dir=...). Anything that does not ask for a directory gets a
+# private one, so a test run or an importing tool can never rewrite the files the
+# running service is reading.
+FTS5_DIR_ENV = "KB_FTS5_DIR"
+DEFAULT_FTS5_DIR = "/tmp"
+# Last logged failure per corpus, so a permanently broken index warns once per
+# distinct reason instead of on every search. The audit event carries it every time.
+_fts5_warned: dict[str, str] = {}
+_private_fts5_dir: Optional[str] = None
+
+
+def _private_fts5_directory() -> str:
+    """Per-process index directory for callers that never named one."""
+    global _private_fts5_dir
+    if _private_fts5_dir is None:
+        _private_fts5_dir = tempfile.mkdtemp(prefix="kb-fts5-private-")
+    return _private_fts5_dir
+
 
 _FTS5_STOP = frozenset(
     "how what why when where which does is are do can the a an to of for with on "
@@ -102,13 +124,20 @@ def _fts5_match_expression(word_list: list[str]) -> str:
     return " OR ".join(parts)
 
 
-def _build_fts5_index(corpus: str, db_path: str) -> str:
+def _fts5_index_path(corpus: str, directory: Optional[str] = None) -> str:
+    """Index file for one corpus: `directory`, then KB_FTS5_DIR, then a private dir."""
+    target = directory or os.getenv(FTS5_DIR_ENV) or _private_fts5_directory()
+    return os.path.join(target, f"kb-fts5-{corpus}.db")
+
+
+def _build_fts5_index(corpus: str, db_path: str, directory: Optional[str] = None) -> str:
     source = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
     try:
         rows = source.execute("SELECT id, title, summary, content FROM entries").fetchall()
     finally:
         source.close()
-    path = f"/tmp/kb-fts5-{corpus}.db"
+    path = _fts5_index_path(corpus, directory)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     db = sqlite3.connect(path)
     db.execute("DROP TABLE IF EXISTS entries_fts")
     db.execute(
@@ -125,6 +154,8 @@ def _build_fts5_index(corpus: str, db_path: str) -> str:
 
 
 def _fts5_query(fts5_path: str, query: str, limit: int) -> list[dict]:
+    """Lexical candidates. Raises sqlite3.Error when the index cannot be read —
+    the caller decides what to do and records why (see _fts5_lookup)."""
     word_list = _fts5_terms(query)
     expression = _fts5_match_expression(word_list)
     if not expression:
@@ -136,11 +167,37 @@ def _fts5_query(fts5_path: str, query: str, limit: int) -> list[dict]:
             "FROM entries_fts WHERE entries_fts MATCH ? ORDER BY score, entry_id LIMIT ?",
             (expression, limit),
         ).fetchall()
-    except sqlite3.OperationalError:
-        return []
     finally:
         db.close()
     return [{"entry_id": row[0], "bm25": row[1]} for row in rows]
+
+
+def _fts5_lookup(
+    corpus: str,
+    fts5_path: str,
+    query_text: str,
+    status: Optional[dict[str, str]] = None,
+) -> list[dict]:
+    """Lexical candidates, or none — never silently.
+
+    A missing file (deleted or mid-rebuild) and a missing/renamed table both land
+    here; the search continues without lexical candidates, but the reason is
+    recorded in `status` for the audit and logged once per distinct reason.
+    """
+    try:
+        return _fts5_query(fts5_path, query_text, FTS5_FETCH_LIMIT)
+    except sqlite3.Error as exc:
+        reason = f"{type(exc).__name__}: {exc}"
+        if status is not None:
+            status["degraded"] = reason
+        if _fts5_warned.get(corpus) != reason:
+            _fts5_warned[corpus] = reason
+            print(
+                f"[fts5] WARNING: {corpus}: lexical index unusable ({reason}) — "
+                f"searching without FTS5 candidates",
+                flush=True,
+            )
+        return []
 
 
 CORPUS_REGISTRY = {
@@ -861,6 +918,7 @@ def _retrieve_corpus(
     alternate_only_rank_limit: Optional[int] = ALTERNATE_ONLY_RANK_LIMIT,
     fts5_path: Optional[str] = None,
     query_text: Optional[str] = None,
+    fts5_status: Optional[dict[str, str]] = None,
 ) -> list[Candidate]:
     primary = _query_collection(corpus, embedding, router_config)
 
@@ -872,7 +930,7 @@ def _retrieve_corpus(
 
     if alternate_embedding is None:
         if use_fts5:
-            fts5_raw = _fts5_query(fts5_path, query_text, FTS5_FETCH_LIMIT)
+            fts5_raw = _fts5_lookup(corpus, fts5_path, query_text, fts5_status)
             primary = _merge_fts5_candidates(primary, fts5_raw, router_config)
         return _fetch_candidates(corpus, primary)
 
@@ -884,7 +942,7 @@ def _retrieve_corpus(
             if item["from_primary"] or item["alternate_rank"] <= alternate_only_rank_limit
         ]
     if use_fts5:
-        fts5_raw = _fts5_query(fts5_path, query_text, FTS5_FETCH_LIMIT)
+        fts5_raw = _fts5_lookup(corpus, fts5_path, query_text, fts5_status)
         merged = _merge_fts5_candidates(merged, fts5_raw, router_config)
     return _fetch_candidates(corpus, merged)
 
@@ -1200,6 +1258,7 @@ def create_v2_app(
     reranker: Callable[[], object],
     union_enabled: bool = False,
     alternate_only_rank_limit: Optional[int] = ALTERNATE_ONLY_RANK_LIMIT,
+    fts5_dir: Optional[str] = None,
 ) -> FastAPI:
     try:
         client_snapshot = _load_clients()
@@ -1211,11 +1270,15 @@ def create_v2_app(
         router_snapshot = None
 
     fts5_paths: dict[str, str] = {}
+    fts5_errors: dict[str, str] = {}
     if router_snapshot is not None and router_snapshot.fts5_enabled:
         for corpus_name, profile in CORPUS_REGISTRY.items():
             try:
-                fts5_paths[corpus_name] = _build_fts5_index(corpus_name, profile["db_path"])
+                fts5_paths[corpus_name] = _build_fts5_index(
+                    corpus_name, profile["db_path"], fts5_dir
+                )
             except Exception as exc:
+                fts5_errors[corpus_name] = f"{type(exc).__name__}: {exc}"
                 print(f"[fts5] WARNING: {corpus_name}: {exc}", flush=True)
 
     def authorize_snapshot(
@@ -1302,6 +1365,13 @@ def create_v2_app(
             raise HTTPException(status_code=503, detail={"reason": "retrieval_unavailable"}) from exc
         candidates = []
         retrieval_failures = []
+        # Per-corpus lexical status. Seeded from the startup build failures (an index
+        # that was never built means every search runs without FTS5 — that must be
+        # visible too), then filled in by _fts5_lookup when a read fails.
+        fts5_status: dict[str, dict[str, str]] = {
+            corpus: ({"degraded": fts5_errors[corpus]} if corpus in fts5_errors else {})
+            for corpus in searchable
+        }
         with ThreadPoolExecutor(max_workers=len(searchable)) as executor:
             futures = {
                 executor.submit(
@@ -1313,6 +1383,7 @@ def create_v2_app(
                     alternate_only_rank_limit,
                     fts5_paths.get(corpus),
                     request.query,
+                    fts5_status[corpus],
                 ): corpus
                 for corpus in searchable
             }
@@ -1436,6 +1507,11 @@ def create_v2_app(
             homelab_count=corpora["homelab"].count,
             ai_count=corpora["ai"].count,
             fts5_candidates=sum(1 for c in candidates if c.from_fts5),
+            fts5_degraded={
+                corpus: value["degraded"]
+                for corpus, value in sorted(fts5_status.items())
+                if value.get("degraded")
+            },
             elapsed_ms=round((time.perf_counter() - started) * 1000, 1),
             **(
                 {

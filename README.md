@@ -47,26 +47,35 @@ one interpreter does not run everything:
 
 | Interpreter | Files | What they pin |
 |---|---|---|
-| `/opt/kb/venv-search/bin/python3` | `test_v1_contract.py`, `test_v2_contract.py`, `test_nexus_synthesis.py`, `test_provision_v2.py` | v1 response and OpenAPI surface, the v2 routing/union/rerank/auth contract, Nexus synthesis prompt and provenance rules, `provision_v2.py` |
+| `/opt/kb/venv-search/bin/python3` | `test_v1_contract.py`, `test_v2_contract.py`, `test_nexus_synthesis.py`, `test_provision_v2.py`, `test_fts5_hybrid.py` | v1 response and OpenAPI surface, the v2 routing/union/rerank/auth contract, Nexus synthesis prompt and provenance rules, `provision_v2.py`, the FTS5 index path/degradation/merge rules |
 | `/opt/kb/venv/bin/python3` | `test_mcp_*.py` | `mcp_server.py` tool names, transports, v2 payloads; `semantic_search`/`kb_get` shaping |
 | any (kb-go `make test` uses `/usr/bin/python3`) | `test_compile_lock_race.py`, `test_retire_orphan.py` | compile.py mutating lock, retire/pass race |
 
 ```bash
 cd /opt/kb
 /opt/kb/venv-search/bin/python3 -m unittest tests.test_v1_contract tests.test_v2_contract \
-    tests.test_nexus_synthesis tests.test_provision_v2
+    tests.test_nexus_synthesis tests.test_provision_v2 tests.test_fts5_hybrid
 /opt/kb/venv/bin/python3 -m unittest discover -s tests -p 'test_mcp_*.py'
 /usr/bin/python3 -m unittest discover -s tests -p 'test_compile_lock_race.py'
 /usr/bin/python3 -m unittest discover -s tests -p 'test_retire_orphan.py'
 ```
 
-Two deliberate test-side stubs keep the suite hermetic: the contract tests replace
-`kb_v2._build_fts5_index` (otherwise every `create_root_app` reads the live corpus
-databases and writes `/tmp/kb-fts5-*.db`), and
-`test_union_matches_versioned_eval_reference` is skipped unless `KB_EVAL_REFERENCE`
-points at `kb-eval/run_merged_bilingual_eval.py`, since kb-eval is a separate repo
-and not part of this deployment. `contracts/v2.openapi.json` is the frozen schema
-the v2 tests compare the generated OpenAPI against.
+The FTS5 lexical index is built when the app is created and read on every search.
+Its location is explicit: the service (`kb_search_api.__main__`) passes
+`/tmp/kb-fts5-<corpus>.db`, `KB_FTS5_DIR` or `create_v2_app(fts5_dir=…)` overrides
+it, and a caller that names neither gets a private per-process directory — so
+importing `kb_search_api` or running a test can never rewrite the index file the
+live service is reading. An index that cannot be read is no longer silent: the
+search still answers without lexical candidates, `[v2-audit]` gains
+`fts5_degraded: {corpus: reason}` and the journal gets one `[fts5] WARNING` per
+distinct reason.
+
+The contract tests additionally stub `kb_v2._build_fts5_index` (they pin routing
+and merge semantics, not the live corpus contents) and set `KB_FTS5_DIR` to their
+own temp directory; `test_union_matches_versioned_eval_reference` is skipped unless
+`KB_EVAL_REFERENCE` points at `kb-eval/run_merged_bilingual_eval.py`, since kb-eval
+is a separate repo and not part of this deployment. `contracts/v2.openapi.json` is
+the frozen schema the v2 tests compare the generated OpenAPI against.
 
 ## Retrieval pipeline
 

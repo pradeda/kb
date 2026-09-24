@@ -11,7 +11,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from kb_v2 import create_v2_app
+from kb_v2 import DEFAULT_FTS5_DIR, FTS5_DIR_ENV, create_v2_app
 
 # --- config ---
 EMBED_SOCKET = "/run/kb-embed/embed.sock"
@@ -709,7 +709,9 @@ def _v1_gone(request: Request):
     raise HTTPException(status_code=410, detail="KB Search v1 is retired")
 
 
-def create_root_app(v1_enabled: bool, union_enabled: bool = False) -> FastAPI:
+def create_root_app(
+    v1_enabled: bool, union_enabled: bool = False, fts5_dir: str | None = None
+) -> FastAPI:
     root = FastAPI(
         title="KB Search API",
         servers=[{"url": "http://192.168.1.174:8050", "description": "Nexus KB Search"}],
@@ -731,15 +733,27 @@ def create_root_app(v1_enabled: bool, union_enabled: bool = False) -> FastAPI:
 
     # Mounted sub-apps are intentionally absent from the parent OpenAPI schema.
     # The strict v2 contract is published separately at /v2/openapi.json.
-    root.mount("/v2", create_v2_app(embed_query, lambda: rerank_model, union_enabled))
+    root.mount(
+        "/v2", create_v2_app(embed_query, lambda: rerank_model, union_enabled, fts5_dir=fts5_dir)
+    )
     return root
 
 
 V1_SEARCH_ENABLED = _parse_v1_search_enabled(os.getenv("KB_V1_SEARCH_ENABLED"))
 UNION_ENABLED = _parse_bilingual_union_enabled(os.getenv("KB_BILINGUAL_UNION_ENABLED"))
-app = create_root_app(V1_SEARCH_ENABLED, UNION_ENABLED)
 
 
 if __name__ == "__main__":
     import uvicorn
+
+    # Built here rather than at import time: the mounted v2 app builds the FTS5
+    # lexical index from the live corpus databases, and importing this module must
+    # not rewrite the index files the running service is reading (tests and tools
+    # import it). ExecStart runs this file as a script, so the service is unaffected.
+    # The service is the one caller that opts into the shared, documented location.
+    app = create_root_app(
+        V1_SEARCH_ENABLED,
+        UNION_ENABLED,
+        fts5_dir=os.getenv(FTS5_DIR_ENV) or DEFAULT_FTS5_DIR,
+    )
     uvicorn.run(app, host="0.0.0.0", port=8050)

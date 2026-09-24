@@ -123,6 +123,9 @@ fts5:
                 "KB_CORPUS_ROUTER_CONFIG": str(router_config),
                 "KB_V2_TOKEN_TEST_FULL": "f" * 64,
                 "KB_V2_TOKEN_TEST_HOMELAB": "h" * 64,
+                # Belt and braces: even without the _build_fts5_index stub below,
+                # nothing this suite creates may land in the service's index dir.
+                "KB_FTS5_DIR": self.temp.name,
             },
         )
         self.environment.start()
@@ -584,7 +587,7 @@ fts5:
         seen = []
         with patch(
             "kb_v2._retrieve_corpus",
-            side_effect=lambda _corpus, _embedding, config, _alternate=None, _alternate_limit=None, _fts5_path=None, _query_text=None: seen.append(config.candidate_k) or [],
+            side_effect=lambda _corpus, _embedding, config, _alternate=None, _alternate_limit=None, _fts5_path=None, _query_text=None, _fts5_status=None: seen.append(config.candidate_k) or [],
         ):
             response = self.client.post(
                 "/kb/search", headers=self.headers, json=self.request("homelab")
@@ -663,7 +666,9 @@ fts5:
                 for option in generated_result["properties"]["public_source_url"]["anyOf"]
             )
         )
-        root = kb_search_api.app.openapi()
+        root = kb_search_api.create_root_app(
+            v1_enabled=False, fts5_dir=self.temp.name
+        ).openapi()
         self.assertNotIn("/v2/kb/search", root["paths"])
 
 
