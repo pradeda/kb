@@ -34,7 +34,8 @@ Everything else in this tree is canonical **here** and has no kb-go counterpart:
 `kb_v2.py`, `kb_search_api.py`, `mcp_server.py`, `gate.py`, `index_gemini.py`,
 `docker-compose.yml`, `corpus-router.yml`, `v2-clients.yml`, `eval/`, `setup/`,
 `prompts/`, `mkdocs.yml`. `tests/` is mirrored in both repos and is run there by
-`make test`.
+`make test`, except `tests/test_mcp_*.py`, which covers `mcp_server.py` and lives
+only here (run it with `/opt/kb/venv/bin/python3 -m unittest discover -s tests -p 'test_mcp_*.py'`).
 
 ## Retrieval pipeline
 
@@ -50,6 +51,24 @@ Query
   ├── Time decay: final = relevance × max(1/(1+days/540), 0.3)
   └── Threshold 0.40 → top 5
 ```
+
+## MCP tools
+
+`mcp_server.py` exposes the corpora to agents (stdio for local Claude Code, `:9100` SSE,
+`:9101` Streamable HTTP). No tool makes an LLM call.
+
+| Tool | What it does |
+|------|--------------|
+| `semantic_search(query, query_alt?, query_alt_language?, scope?)` | Default search, required before agent work. `scope="both"` (default): homelab hits in full, at most 2 AI hits as a brief (source + summary, ≤700 chars). `scope="ai"`: full AI entries, for questions about models, tools, papers or techniques. `scope="homelab"`: homelab only. |
+| `kb_get(reference)` | Full text of one entry, e.g. `kb_get("ai:363")`, read-only from the corpus SQLite. Use it to expand a brief. |
+| `corpus_search(query, scope, top_k, …)` | Raw v2 response as JSON (grouped + merged ranking). `scope="auto"` returns 409 until the router is calibrated. |
+| `add(content, title, tag, corpus?)` | Adds a note via `kb add`; `corpus="ai"` for the AI corpus. |
+| `supersede(entry_id, replacement)` | Marks an obsolete entry `[SUPERSEDED]` and links its replacement. |
+| `history(reference)` | Supersede lineage of one entry as JSON. |
+
+AI entries are shortened in mixed searches because they are ~4× longer than homelab
+notes (median 6.8 KB vs 1.7 KB) and rarely what a homelab task needs. On 32 homelab and
+12 AI eval queries this cut output by 17% and 88% with no lost hits (KB `homelab:1076`).
 
 ## Requirements
 
