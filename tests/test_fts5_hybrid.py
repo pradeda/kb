@@ -35,24 +35,40 @@ SERVICE_INDEX = Path("/tmp/kb-fts5-homelab.db")
 
 
 def corpus_db(path: Path) -> Path:
-    """A stand-in for a corpus database: only the columns the index reads."""
+    """A stand-in for a corpus database, with the columns the search path reads."""
     connection = sqlite3.connect(path)
     try:
         connection.execute(
-            "CREATE TABLE entries (id INTEGER PRIMARY KEY, title TEXT, summary TEXT, content TEXT)"
+            "CREATE TABLE entries (id INTEGER PRIMARY KEY, type TEXT, content TEXT, "
+            "title TEXT, summary TEXT, tags TEXT, raw_path TEXT, source TEXT, "
+            "compiled_at TEXT, embedded_at TEXT, created_at TEXT)"
         )
         connection.executemany(
-            "INSERT INTO entries VALUES (?,?,?,?)",
+            "INSERT INTO entries VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             [
-                (1, "Docker networking", "", "Bridge networks and port publishing on Nexus."),
-                (2, "WireGuard", "VPN peers", "Peer configuration and preshared keys."),
-                (3, "Plex", "", "Library paths and hardware transcoding."),
+                (1, "note", "Bridge networks and port publishing on Nexus.", "Docker networking", "", "docker", None, "telegram", None, None, "2026-08-01T10:00:00"),
+                (2, "note", "Peer configuration and preshared keys.", "WireGuard", "VPN peers", "vpn", None, "telegram", None, None, "2026-08-02T10:00:00"),
+                (3, "note", "Library paths and hardware transcoding.", "Plex", "", "plex", None, "telegram", None, None, "2026-08-03T10:00:00"),
             ],
         )
         connection.commit()
     finally:
         connection.close()
     return path
+
+
+def add_entry(path, entry_id: int, title: str, content: str) -> None:
+    """Insert one note the way compile.py would: a new row with a fresh created_at."""
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute(
+            "INSERT INTO entries (id, type, content, title, summary, tags, source, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (entry_id, "note", content, title, "", "test", "telegram", "2026-09-24T13:30:00"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
 
 
 def router_config(**changes) -> kb_v2.RouterConfig:
@@ -154,27 +170,26 @@ class Fts5DegradationTests(unittest.TestCase):
 
     def test_retrieve_corpus_records_a_broken_index(self) -> None:
         status: dict[str, str] = {}
+        # Source gone and index gone: the refresh cannot fingerprint, and the query
+        # cannot read — both must land in the status instead of failing the search.
+        index = kb_v2.Fts5Index(
+            "homelab",
+            str(self.dir / "missing-source.db"),
+            str(self.dir / "missing-index.db"),
+            (),
+        )
         with patch("kb_v2._query_collection", return_value=[]), patch(
             "kb_v2._fetch_candidates", return_value=[]
         ):
             candidates = kb_v2._retrieve_corpus(
-                "homelab",
-                [0.1],
-                self.config,
-                None,
-                None,
-                str(self.dir / "missing-index.db"),
-                "docker",
-                status,
+                "homelab", [0.1], self.config, None, None, index, "docker", status
             )
         self.assertEqual(candidates, [])
         self.assertIn("OperationalError", status.get("degraded", ""))
 
     def test_healthy_index_records_no_degradation(self) -> None:
         status: dict[str, str] = {}
-        index = kb_v2._build_fts5_index(
-            "homelab", str(corpus_db(self.dir / "ok.db")), str(self.dir)
-        )
+        index = kb_v2.Fts5Index.build("homelab", str(corpus_db(self.dir / "ok.db")), str(self.dir))
         with patch("kb_v2._query_collection", return_value=[]), patch(
             "kb_v2._fetch_candidates", return_value=[]
         ):
@@ -239,8 +254,15 @@ fts5:
         )
         health.start()
         self.addCleanup(health.stop)
-        missing = str(self.dir / "missing-index.db")
-        with patch("kb_v2._build_fts5_index", return_value=missing), patch(
+        # A stub source keeps the freshness check off the live database, and a corrupt
+        # index file makes the lexical read fail without a rebuild being triggered.
+        source = corpus_db(self.dir / "audit-source.db")
+        broken = self.dir / "broken-index.db"
+        broken.write_bytes(b"not a database")
+        index = kb_v2.Fts5Index(
+            "homelab", str(source), str(broken), kb_v2._fts5_source_signature(str(source))
+        )
+        with patch("kb_v2.Fts5Index.build", return_value=index), patch(
             "kb_v2._query_collection", return_value=[]
         ), patch("kb_v2._fetch_candidates", return_value=[]), patch(
             "kb_v2._audit"
@@ -254,7 +276,7 @@ fts5:
         self.assertEqual(response.status_code, 200)
         fields = audit.call_args.kwargs
         self.assertEqual(fields["fts5_candidates"], 0)
-        self.assertIn("OperationalError", fields["fts5_degraded"]["homelab"])
+        self.assertTrue(fields["fts5_degraded"]["homelab"])
 
 
 class Fts5QueryTests(unittest.TestCase):
@@ -350,6 +372,245 @@ class Fts5QueryTests(unittest.TestCase):
         self.assertEqual(lexical_only, [100, 101, 102, 103, 104])
         self.assertEqual(len(merged), config.candidate_k)
         self.assertEqual(len({item["entry_id"] for item in merged}), len(merged))
+
+
+class FakeTokenizer:
+    """Character offsets suffice for short fixtures; no model download."""
+
+    def encode(self, text, **kwargs):
+        return list(range(len(text)))
+
+    def __call__(self, text, **kwargs):
+        return {"offset_mapping": [(i, i + 1) for i in range(len(text))]}
+
+    def num_special_tokens_to_add(self, pair=True):
+        return 3
+
+
+class FakeReranker:
+    max_seq_length = 512
+
+    def __init__(self, score: float = 2.0) -> None:
+        self.score = score
+        self.tokenizer = FakeTokenizer()
+
+    def predict(self, pairs):
+        return [self.score] * len(pairs)
+
+
+class Fts5FreshnessTests(unittest.TestCase):
+    """The index follows the source database, not only the process start."""
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.temp.name)
+        self.source = corpus_db(self.dir / "source.db")
+        self.index = kb_v2.Fts5Index.build("homelab", str(self.source), str(self.dir))
+        self.status: dict[str, str] = {}
+        self.throttle = patch.object(kb_v2, "FTS5_RECHECK_SECONDS", 0.0)
+        self.throttle.start()
+        self.addCleanup(self.throttle.stop)
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def write(self, statement: str, parameters: tuple = ()) -> None:
+        connection = sqlite3.connect(self.source)
+        try:
+            connection.execute(statement, parameters)
+            connection.commit()
+        finally:
+            connection.close()
+
+    def ids(self, query: str) -> list[int]:
+        return [hit["entry_id"] for hit in kb_v2._fts5_query(self.index.path, query, 10)]
+
+    def test_new_row_is_found_by_the_next_query(self) -> None:
+        self.assertEqual(self.ids("beszel monitoring"), [])
+        add_entry(self.source, 4, "Beszel agent", "Beszel monitoring for the Nexus host.")
+        self.index.refresh(self.status)
+        self.assertEqual(self.ids("beszel monitoring"), [4])
+        self.assertEqual(self.status, {})
+
+    def test_updated_row_replaces_its_lexical_content(self) -> None:
+        self.assertEqual(self.ids("preshared keys"), [2])
+        self.write(
+            "UPDATE entries SET title=?, content=? WHERE id=?",
+            ("Tailscale", "Replaced WireGuard with Tailscale on the Pi.", 2),
+        )
+        self.index.refresh(self.status)
+        self.assertEqual(self.ids("tailscale"), [2])
+        self.assertEqual(self.ids("preshared keys"), [])
+        self.assertEqual(self.status, {})
+
+    def test_deleted_row_disappears(self) -> None:
+        self.assertEqual(self.ids("transcoding"), [3])
+        self.write("DELETE FROM entries WHERE id=?", (3,))
+        self.index.refresh(self.status)
+        self.assertEqual(self.ids("transcoding"), [])
+        self.assertEqual(self.status, {})
+
+    def test_unchanged_source_does_not_rebuild(self) -> None:
+        with patch("kb_v2._build_fts5_index", wraps=kb_v2._build_fts5_index) as build:
+            self.index.refresh(self.status)
+            self.index.refresh(self.status)
+        build.assert_not_called()
+        self.assertEqual(self.status, {})
+
+    def test_throttle_skips_the_check_within_the_window(self) -> None:
+        self.index.refresh(self.status)  # establishes the check window
+        add_entry(self.source, 4, "Beszel agent", "Beszel monitoring for the Nexus host.")
+        with patch.object(kb_v2, "FTS5_RECHECK_SECONDS", 3600.0), patch(
+            "kb_v2._build_fts5_index", wraps=kb_v2._build_fts5_index
+        ) as build:
+            self.index.refresh(self.status)
+        build.assert_not_called()
+        # The old index keeps answering; the new row waits for the next window.
+        self.assertEqual(self.ids("beszel monitoring"), [])
+
+    def test_missing_index_file_is_rebuilt(self) -> None:
+        os.remove(self.index.path)
+        self.index.refresh(self.status)
+        self.assertTrue(Path(self.index.path).is_file())
+        self.assertEqual(self.ids("wireguard"), [2])
+        self.assertEqual(self.status, {})
+
+    def test_unreadable_source_keeps_the_old_index_and_records_the_reason(self) -> None:
+        os.rename(self.source, str(self.source) + ".gone")
+        self.index.refresh(self.status)
+        self.assertIn("fingerprint failed", self.status["degraded"])
+        self.assertEqual(self.ids("wireguard"), [2])
+
+    def test_failed_rebuild_keeps_the_old_index_and_records_the_reason(self) -> None:
+        add_entry(self.source, 4, "Beszel agent", "Beszel monitoring for the Nexus host.")
+        with patch("kb_v2._build_fts5_index", side_effect=OSError("no space left on device")):
+            self.index.refresh(self.status)
+        self.assertIn("index rebuild failed", self.status["degraded"])
+        self.assertIn("no space left on device", self.status["degraded"])
+        self.assertEqual(self.ids("wireguard"), [2])
+        self.assertEqual(self.ids("beszel monitoring"), [])
+
+    def test_replacement_is_atomic_and_leaves_no_temporary_files(self) -> None:
+        reader = sqlite3.connect(f"file:{self.index.path}?mode=ro", uri=True)
+        try:
+            add_entry(self.source, 4, "Beszel agent", "Beszel monitoring for the Nexus host.")
+            self.index.refresh(self.status)
+            # os.replace, not DROP TABLE: a reader holding the old file keeps working.
+            self.assertEqual(reader.execute("SELECT count(*) FROM entries_fts").fetchone()[0], 3)
+        finally:
+            reader.close()
+        self.assertEqual(sorted(path.name for path in self.dir.glob("*.tmp")), [])
+        self.assertEqual(self.ids("beszel monitoring"), [4])
+
+
+class Fts5FreshnessEndpointTests(unittest.TestCase):
+    """End to end: a note added while the app runs is found by the next search."""
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.temp.name)
+        self.source = corpus_db(self.dir / "homelab.db")
+        self.ai_source = corpus_db(self.dir / "ai.db")
+        clients = self.dir / "clients.yml"
+        clients.write_text(
+            """clients:
+  full:
+    token_env: KB_V2_TOKEN_TEST_FULL
+    allowed_corpora: [homelab, ai]
+    allowed_scopes: [homelab, ai, both, auto]
+""",
+            encoding="utf-8",
+        )
+        os.chmod(clients, 0o600)
+        router = self.dir / "corpus-router.yml"
+        router.write_text(
+            """router_version: corpus-router-v2-fts5-hybrid
+accept_thresholds:
+  homelab: 0.60
+  ai: 0.60
+reject_threshold: 0.40
+both_margin: 0.05
+dead_zone:
+  lower: 0.40
+  upper: 0.60
+candidate_k: 25
+max_distance:
+  homelab: 0.60
+  ai: 0.60
+ai_decay:
+  mode: disabled
+fts5:
+  enabled: true
+  semantic_k: 20
+  lexical_k: 5
+""",
+            encoding="utf-8",
+        )
+        os.chmod(router, 0o600)
+        environment = patch.dict(
+            os.environ,
+            {
+                "KB_V2_CLIENTS_CONFIG": str(clients),
+                "KB_CORPUS_ROUTER_CONFIG": str(router),
+                "KB_V2_TOKEN_TEST_FULL": "f" * 64,
+                "KB_FTS5_DIR": str(self.dir),
+            },
+        )
+        environment.start()
+        self.addCleanup(environment.stop)
+        registry = patch.dict(
+            kb_v2.CORPUS_REGISTRY,
+            {
+                "homelab": {"db_path": str(self.source), "collection": "homelab_collection"},
+                "ai": {"db_path": str(self.ai_source), "collection": "ai_collection"},
+            },
+            clear=True,
+        )
+        registry.start()
+        self.addCleanup(registry.stop)
+        health = patch(
+            "kb_v2._corpus_health",
+            side_effect=lambda corpus, _ready: CorpusHealthV2(
+                ready=True, collection=f"{corpus}_collection"
+            ),
+        )
+        health.start()
+        self.addCleanup(health.stop)
+        throttle = patch.object(kb_v2, "FTS5_RECHECK_SECONDS", 0.0)
+        throttle.start()
+        self.addCleanup(throttle.stop)
+        self.audit = patch("kb_v2._audit")
+        self.audit_mock = self.audit.start()
+        self.addCleanup(self.audit.stop)
+        self.client = TestClient(create_v2_app(Mock(return_value=[0.1]), lambda: FakeReranker()))
+        self.headers = {"Authorization": "Bearer " + "f" * 64}
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def search(self) -> dict:
+        response = self.client.post(
+            "/kb/search",
+            headers=self.headers,
+            json={"query": "beszel monitoring", "scope": "homelab", "top_k": 5, "allow_degraded": False},
+        )
+        self.assertEqual(response.status_code, 200)
+        return response.json()
+
+    def test_note_added_after_startup_is_found_without_a_restart(self) -> None:
+        with patch("kb_v2._query_collection", return_value=[]):
+            before = self.search()
+            self.assertEqual(before["total_count"], 0)
+            self.assertEqual(self.audit_mock.call_args.kwargs["fts5_candidates"], 0)
+
+            add_entry(self.source, 4, "Beszel agent", "Beszel monitoring for the Nexus host.")
+
+            after = self.search()
+        self.assertEqual(
+            [item["ref"] for item in after["corpora"]["homelab"]["results"]], ["homelab:4"]
+        )
+        self.assertEqual(self.audit_mock.call_args.kwargs["fts5_candidates"], 1)
+        self.assertEqual(self.audit_mock.call_args.kwargs["fts5_degraded"], {})
 
 
 if __name__ == "__main__":

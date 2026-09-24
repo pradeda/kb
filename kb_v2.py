@@ -15,6 +15,7 @@ import re
 import sqlite3
 import stat
 import tempfile
+import threading
 import time
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -67,6 +68,10 @@ FTS5_BM25_WEIGHTS = (0, 3, 2, 1)
 # running service is reading.
 FTS5_DIR_ENV = "KB_FTS5_DIR"
 DEFAULT_FTS5_DIR = "/tmp"
+# How often a corpus source database is fingerprinted for freshness. The fingerprint
+# itself is one aggregate query plus two stats; this throttle keeps a busy search
+# loop from paying even that on every request.
+FTS5_RECHECK_SECONDS = 30.0
 # Last logged failure per corpus, so a permanently broken index warns once per
 # distinct reason instead of on every search. The audit event carries it every time.
 _fts5_warned: dict[str, str] = {}
@@ -130,24 +135,88 @@ def _fts5_index_path(corpus: str, directory: Optional[str] = None) -> str:
     return os.path.join(target, f"kb-fts5-{corpus}.db")
 
 
-def _build_fts5_index(corpus: str, db_path: str, directory: Optional[str] = None) -> str:
+def _fts5_source_signature(source_path: str) -> tuple:
+    """Cheap fingerprint of everything the index mirrors.
+
+    Row count, max id and the newest created_at catch inserts and deletes. The summed
+    length of the indexed columns catches an in-place rewrite — supersede rewrites a
+    row and leaves all three untouched. MAX(compiled_at) is deliberately not used:
+    compile.py sets it to NULL when it rewrites a row. Measured cost on 2026-09-24:
+    ~4.7 ms per corpus (969 rows, 2.7 MB of text), paid at most once per
+    FTS5_RECHECK_SECONDS.
+
+    The database/WAL mtime and size are kept as a backstop for a change that leaves the
+    four row-level numbers identical; they come from a coarse clock, so they are never
+    the only signal for an in-place edit.
+    """
+    stat_db = os.stat(source_path)
+    wal_path = source_path + "-wal"
+    stat_wal = os.stat(wal_path) if os.path.exists(wal_path) else None
+    connection = sqlite3.connect(f"file:{source_path}?mode=ro", uri=True, timeout=5)
+    try:
+        row = connection.execute(
+            "SELECT COUNT(*), COALESCE(MAX(id), 0), COALESCE(MAX(created_at), ''), "
+            "COALESCE(SUM(LENGTH(title) + LENGTH(summary) + LENGTH(content)), 0) "
+            "FROM entries"
+        ).fetchone()
+    finally:
+        connection.close()
+    return (
+        row[0],
+        row[1],
+        row[2],
+        row[3],
+        stat_db.st_mtime_ns,
+        stat_db.st_size,
+        stat_wal.st_mtime_ns if stat_wal is not None else None,
+        stat_wal.st_size if stat_wal is not None else None,
+    )
+
+
+def _build_fts5_index(
+    corpus: str,
+    db_path: str,
+    directory: Optional[str] = None,
+    target: Optional[str] = None,
+) -> str:
+    """Build the corpus index and swap it in atomically.
+
+    The table is filled in a temporary file next to the target and moved over it with
+    os.replace, so a search reading the current file never sees a dropped or half
+    built table (readers keep the old inode alive).
+    """
     source = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=5)
     try:
         rows = source.execute("SELECT id, title, summary, content FROM entries").fetchall()
     finally:
         source.close()
-    path = _fts5_index_path(corpus, directory)
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    db = sqlite3.connect(path)
-    db.execute("DROP TABLE IF EXISTS entries_fts")
-    db.execute(
-        f"CREATE VIRTUAL TABLE entries_fts USING fts5("
-        f"entry_id UNINDEXED, title, summary, content, "
-        f"tokenize='{FTS5_TOKENIZER}')"
+    path = target or _fts5_index_path(corpus, directory)
+    directory_path = os.path.dirname(path) or "."
+    os.makedirs(directory_path, exist_ok=True)
+    handle, temporary = tempfile.mkstemp(
+        prefix=f"kb-fts5-{corpus}-", suffix=".tmp", dir=directory_path
     )
-    db.executemany("INSERT INTO entries_fts VALUES(?,?,?,?)", rows)
-    db.commit()
-    db.close()
+    os.close(handle)
+    try:
+        db = sqlite3.connect(temporary)
+        try:
+            db.execute("DROP TABLE IF EXISTS entries_fts")
+            db.execute(
+                f"CREATE VIRTUAL TABLE entries_fts USING fts5("
+                f"entry_id UNINDEXED, title, summary, content, "
+                f"tokenize='{FTS5_TOKENIZER}')"
+            )
+            db.executemany("INSERT INTO entries_fts VALUES(?,?,?,?)", rows)
+            db.commit()
+        finally:
+            db.close()
+        os.replace(temporary, path)
+    except BaseException:
+        try:
+            os.remove(temporary)
+        except OSError:
+            pass
+        raise
     count = len(rows)
     print(f"[fts5] Built index for {corpus}: {count} entries → {path}", flush=True)
     return path
@@ -172,6 +241,78 @@ def _fts5_query(fts5_path: str, query: str, limit: int) -> list[dict]:
     return [{"entry_id": row[0], "bm25": row[1]} for row in rows]
 
 
+def _fts5_record(corpus: str, reason: str, status: Optional[dict[str, str]]) -> None:
+    """Publish a lexical-index failure: audit status plus one deduped log line."""
+    if status is not None:
+        status["degraded"] = reason
+    if _fts5_warned.get(corpus) != reason:
+        _fts5_warned[corpus] = reason
+        print(
+            f"[fts5] WARNING: {corpus}: {reason} — searching without fresh FTS5 candidates",
+            flush=True,
+        )
+
+
+class Fts5Index:
+    """One corpus's lexical index file and the source fingerprint it was built from.
+
+    The index used to be rebuilt only when the app was created, so every note added
+    between restarts was invisible to the lexical lane. `refresh()` fingerprints the
+    source database at most once per FTS5_RECHECK_SECONDS and rebuilds when it moved:
+
+      * one rebuild per corpus at a time (non-blocking lock) — a concurrent search
+        keeps using the current file instead of waiting;
+      * the rebuild is atomic (see _build_fts5_index), so readers never see a
+        half-built table;
+      * a failed rebuild or fingerprint leaves the current file in place and reports
+        the reason through the audit status.
+    """
+
+    def __init__(self, corpus: str, source_path: str, path: str, signature: tuple) -> None:
+        self.corpus = corpus
+        self.source_path = source_path
+        self.path = path
+        self.signature = signature
+        self.lock = threading.Lock()
+        self.checked_at = 0.0
+
+    @classmethod
+    def build(cls, corpus: str, source_path: str, directory: Optional[str] = None) -> "Fts5Index":
+        path = _build_fts5_index(corpus, source_path, directory)
+        return cls(corpus, source_path, path, _fts5_source_signature(source_path))
+
+    def refresh(self, status: Optional[dict[str, str]] = None) -> None:
+        now = time.monotonic()
+        if now - self.checked_at < FTS5_RECHECK_SECONDS:
+            return
+        if not self.lock.acquire(blocking=False):
+            return
+        try:
+            self.checked_at = now
+            try:
+                signature = _fts5_source_signature(self.source_path)
+            except (sqlite3.Error, OSError) as exc:
+                _fts5_record(
+                    self.corpus, f"source fingerprint failed ({type(exc).__name__}: {exc})", status
+                )
+                return
+            if signature == self.signature and os.path.exists(self.path):
+                return
+            try:
+                path = _build_fts5_index(
+                    self.corpus, self.source_path, os.path.dirname(self.path) or ".", self.path
+                )
+            except Exception as exc:
+                _fts5_record(
+                    self.corpus, f"index rebuild failed ({type(exc).__name__}: {exc})", status
+                )
+                return
+            self.path = path
+            self.signature = signature
+        finally:
+            self.lock.release()
+
+
 def _fts5_lookup(
     corpus: str,
     fts5_path: str,
@@ -187,16 +328,7 @@ def _fts5_lookup(
     try:
         return _fts5_query(fts5_path, query_text, FTS5_FETCH_LIMIT)
     except sqlite3.Error as exc:
-        reason = f"{type(exc).__name__}: {exc}"
-        if status is not None:
-            status["degraded"] = reason
-        if _fts5_warned.get(corpus) != reason:
-            _fts5_warned[corpus] = reason
-            print(
-                f"[fts5] WARNING: {corpus}: lexical index unusable ({reason}) — "
-                f"searching without FTS5 candidates",
-                flush=True,
-            )
+        _fts5_record(corpus, f"lexical index unusable ({type(exc).__name__}: {exc})", status)
         return []
 
 
@@ -916,7 +1048,7 @@ def _retrieve_corpus(
     router_config: RouterConfig,
     alternate_embedding: Optional[list[float]] = None,
     alternate_only_rank_limit: Optional[int] = ALTERNATE_ONLY_RANK_LIMIT,
-    fts5_path: Optional[str] = None,
+    fts5_index: Optional[Fts5Index] = None,
     query_text: Optional[str] = None,
     fts5_status: Optional[dict[str, str]] = None,
 ) -> list[Candidate]:
@@ -924,13 +1056,14 @@ def _retrieve_corpus(
 
     use_fts5 = (
         router_config.fts5_enabled
-        and fts5_path is not None
+        and fts5_index is not None
         and query_text is not None
     )
 
     if alternate_embedding is None:
         if use_fts5:
-            fts5_raw = _fts5_lookup(corpus, fts5_path, query_text, fts5_status)
+            fts5_index.refresh(fts5_status)
+            fts5_raw = _fts5_lookup(corpus, fts5_index.path, query_text, fts5_status)
             primary = _merge_fts5_candidates(primary, fts5_raw, router_config)
         return _fetch_candidates(corpus, primary)
 
@@ -942,7 +1075,8 @@ def _retrieve_corpus(
             if item["from_primary"] or item["alternate_rank"] <= alternate_only_rank_limit
         ]
     if use_fts5:
-        fts5_raw = _fts5_lookup(corpus, fts5_path, query_text, fts5_status)
+        fts5_index.refresh(fts5_status)
+        fts5_raw = _fts5_lookup(corpus, fts5_index.path, query_text, fts5_status)
         merged = _merge_fts5_candidates(merged, fts5_raw, router_config)
     return _fetch_candidates(corpus, merged)
 
@@ -1269,12 +1403,12 @@ def create_v2_app(
     except RuntimeError:
         router_snapshot = None
 
-    fts5_paths: dict[str, str] = {}
+    fts5_indexes: dict[str, Fts5Index] = {}
     fts5_errors: dict[str, str] = {}
     if router_snapshot is not None and router_snapshot.fts5_enabled:
         for corpus_name, profile in CORPUS_REGISTRY.items():
             try:
-                fts5_paths[corpus_name] = _build_fts5_index(
+                fts5_indexes[corpus_name] = Fts5Index.build(
                     corpus_name, profile["db_path"], fts5_dir
                 )
             except Exception as exc:
@@ -1381,7 +1515,7 @@ def create_v2_app(
                     router_config,
                     alternate_embedding if corpus == "homelab" else None,
                     alternate_only_rank_limit,
-                    fts5_paths.get(corpus),
+                    fts5_indexes.get(corpus),
                     request.query,
                     fts5_status[corpus],
                 ): corpus

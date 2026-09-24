@@ -34,13 +34,13 @@ def golden_result(entry_id: int = 42) -> SearchResult:
 
 
 def root_app(v1_enabled: bool) -> object:
-    """Build the root app with the FTS5 index build stubbed out.
+    """Build the root app with the lexical lane stubbed out.
 
-    create_root_app mounts the v2 app, which eagerly builds the lexical index
-    from the live corpus databases. These tests pin the v1 surface only, so the
-    build is skipped to keep them hermetic and fast.
+    create_root_app mounts the v2 app, which builds the FTS5 index from the live
+    corpus databases. These tests pin the v1 surface only, so the lane is left
+    absent instead: no live database reads, no index files.
     """
-    with patch("kb_v2._build_fts5_index", return_value=None):
+    with patch("kb_v2.Fts5Index.build", return_value=None):
         return kb_search_api.create_root_app(v1_enabled)
 
 

@@ -131,13 +131,11 @@ fts5:
         self.environment.start()
         self.reranker = FakeReranker()
         self.embed = Mock(return_value=[0.1, 0.2])
-        # The router version binding requires fts5 to be enabled, but these are
-        # contract tests for routing/union/rerank semantics: building a real
-        # lexical index would read the live corpus databases and leak unrelated
-        # hits into every expected candidate set. No index means no FTS5 merge
-        # (fts5_path is None), so each test pins only what it sets up itself.
-        # Must be patched before create_v2_app, which builds the indexes eagerly.
-        self.fts5 = patch("kb_v2._build_fts5_index", return_value=None)
+        # These are contract tests for routing/union/rerank semantics, not for the live
+        # corpus contents: the lexical lane is stubbed out, so no index is built and no
+        # FTS5 hits leak into the expected candidate sets. KB_FTS5_DIR below is belt and
+        # braces in case the stub is ever removed.
+        self.fts5 = patch("kb_v2.Fts5Index.build", return_value=None)
         self.fts5.start()
         self.client = TestClient(create_v2_app(self.embed, lambda: self.reranker))
         self.headers = {"Authorization": "Bearer " + "f" * 64}

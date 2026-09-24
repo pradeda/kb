@@ -65,17 +65,27 @@ Its location is explicit: the service (`kb_search_api.__main__`) passes
 `/tmp/kb-fts5-<corpus>.db`, `KB_FTS5_DIR` or `create_v2_app(fts5_dir=…)` overrides
 it, and a caller that names neither gets a private per-process directory — so
 importing `kb_search_api` or running a test can never rewrite the index file the
-live service is reading. An index that cannot be read is no longer silent: the
-search still answers without lexical candidates, `[v2-audit]` gains
+live service is reading.
+
+The index also follows the source database instead of only the process start. Before
+each lexical query, `kb_v2.Fts5Index.refresh()` fingerprints the corpus DB (row
+count, max id, newest `created_at`, summed length of the indexed columns, plus the
+DB/WAL mtime and size; ~4.7 ms, paid at most once per `FTS5_RECHECK_SECONDS` = 30 s
+per corpus) and rebuilds when it moved — inserts, deletes and in-place rewrites
+(supersede, retire) all count. One rebuild per corpus at a time, into a temporary
+file that is `os.replace`d over the old one, so a concurrent search keeps reading the
+current index; a failed fingerprint or rebuild leaves that index in place and reports
+the reason. An index that cannot be read is never silent: the search still answers
+without lexical candidates, `[v2-audit]` gains
 `fts5_degraded: {corpus: reason}` and the journal gets one `[fts5] WARNING` per
 distinct reason.
 
-The contract tests additionally stub `kb_v2._build_fts5_index` (they pin routing
-and merge semantics, not the live corpus contents) and set `KB_FTS5_DIR` to their
-own temp directory; `test_union_matches_versioned_eval_reference` is skipped unless
-`KB_EVAL_REFERENCE` points at `kb-eval/run_merged_bilingual_eval.py`, since kb-eval
-is a separate repo and not part of this deployment. `contracts/v2.openapi.json` is
-the frozen schema the v2 tests compare the generated OpenAPI against.
+The contract tests replace the lexical lane (`kb_v2.Fts5Index.build`) so they never
+read the live corpus databases, and set `KB_FTS5_DIR` to their own temp directory;
+`test_union_matches_versioned_eval_reference` is skipped unless `KB_EVAL_REFERENCE`
+points at `kb-eval/run_merged_bilingual_eval.py`, since kb-eval is a separate repo and
+not part of this deployment. `contracts/v2.openapi.json` is the frozen schema the v2
+tests compare the generated OpenAPI against.
 
 ## Retrieval pipeline
 
