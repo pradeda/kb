@@ -5,9 +5,8 @@ health route, and the purpose-bound nexus synthesis endpoint.
 The v1 search surface (/kb/search, /kb/websearch) is retired and answers 410; its
 pipeline was removed once the nexus synthesis endpoint moved to the v2 lane."""
 
-import hmac, json, sqlite3, socket, math, os, time
+import hmac, json, socket, os, time
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 from typing import Callable, Literal, Optional
 
 import httpx
@@ -19,14 +18,6 @@ from kb_v2 import DEFAULT_FTS5_DIR, FTS5_DIR_ENV, Candidate, create_v2_app
 
 # --- config ---
 EMBED_SOCKET = "/run/kb-embed/embed.sock"
-CHROMA_BASE = "http://localhost:8000/api/v2/tenants/default_tenant/databases/default_database"
-CHROMA_COLLECTION = "kb_collection"
-DB_PATH = "/opt/kb/kb.db"
-MAX_DISTANCE = 0.60          # cosine floor — discard obvious noise (0.40 was too tight for short/single-word queries)
-N_RESULTS = 25               # broad recall before reranking (was 10)
-RERANK_THRESHOLD = 0.40      # minimum cross-encoder relevance to include a result (applied pre-decay)
-DECAY_HALF_LIFE = 540.0      # days (~1.5yr) — conservative for homelab technical docs
-DECAY_FLOOR = 0.3            # minimum decay multiplier (entry never drops below 30%)
 # Multilingual sibling of ms-marco-MiniLM (same MS MARCO lineage, trained on the
 # translated mMARCO set). The English-only predecessor scored Serbian queries against
 # English AI-corpus documents at ~0, which made that corpus unreachable for ~62% of
@@ -63,36 +54,23 @@ def _parse_bilingual_union_enabled(raw: Optional[str]) -> bool:
 
 
 class RerankerUnavailable(RuntimeError):
-    """Raised when Layer 2 cannot score, so the request fails closed.
+    """Raised when the synthesis retrieval lane cannot score, so the request fails closed.
 
-    v1 used to fall back to `1.0 - distance` here. That looked like graceful
-    degradation but silently changed what the pipeline means: RERANK_THRESHOLD
-    is calibrated for cross-encoder sigmoid scores, and the fallback applied the
-    same 0.40 cutoff to a cosine-distance scale. Callers got a 200 and no way to
+    The retired v1 pipeline used to fall back to `1.0 - distance` here. That looked
+    like graceful degradation but silently changed what the pipeline means: the
+    relevance cutoffs are calibrated for cross-encoder sigmoid scores, and the
+    fallback applied them to a cosine-distance scale. Callers got a 200 and no way to
     tell.
 
-    v2 also fails closed, but reports two different reasons: its preflight feeds
-    reranker readiness into `_corpus_health`, so a model that never loaded comes
-    back as `required_corpus_unavailable`, and `reranker_unavailable` is reserved
-    for a reranker that fails mid-request. v1 has no corpus-scope concept, so it
-    reports `reranker_unavailable` for both. Same status code and envelope, not
-    the same reason string — do not assume they are interchangeable.
+    The v2 lane also fails closed but reports two different reasons: its preflight
+    feeds reranker readiness into `_corpus_health`, so a model that never loaded comes
+    back as `required_corpus_unavailable`, and `reranker_unavailable` is reserved for
+    a reranker that fails mid-request. The synthesis endpoint has no corpus-scope
+    concept, so it reports `reranker_unavailable` for a model that is not loaded —
+    the same status code and envelope, not the same reason string as v2.
     """
 
-# --- cached collection UUID (resolved at startup, re-resolved on 404) ---
-_collection_id = None
 
-
-# --- sigmoid: map raw cross-encoder score to [0, 1] relevance ---
-def _sigmoid(x: float) -> float:
-    # ms-marco typically outputs in [-10, 10]; sigmoid centers at ~0.5 for x≈0
-    try:
-        return 1.0 / (1.0 + math.exp(-x))
-    except OverflowError:
-        return 1.0 if x > 0 else 0.0
-
-
-# --- fastapi with lifespan (model load + warmup + graceful shutdown) ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global rerank_model
@@ -126,19 +104,6 @@ async def _reranker_unavailable_handler(request, exc: RerankerUnavailable):
     """Fail closed with the v2 status code and envelope. See RerankerUnavailable
     for why the reason string still differs from v2's preflight answer."""
     return JSONResponse(status_code=503, content={"detail": {"reason": "reranker_unavailable"}})
-
-
-class SearchResult(BaseModel):
-    id: int
-    title: Optional[str] = None
-    content: Optional[str] = None
-    summary: Optional[str] = None
-    tags: Optional[str] = None
-    source: Optional[str] = None
-    date: Optional[str] = None
-    distance: float = 0.0          # original cosine distance (lower = better)
-    relevance: float = 0.0         # cross-encoder relevance score [0, 1]
-    final_score: float = 0.0       # relevance × decay
 
 
 class NexusRelevanceRequest(BaseModel):
@@ -236,195 +201,6 @@ def embed_query(text: str) -> list[float]:
 
 
 # --- chromadb ---
-def get_collection_id(force_refresh: bool = False) -> str:
-    """Resolve collection name to UUID (cached — UUID only changes if the collection is recreated)."""
-    global _collection_id
-    if _collection_id is None or force_refresh:
-        client = httpx.Client(timeout=10)
-        resp = client.get(f"{CHROMA_BASE}/collections/{CHROMA_COLLECTION}")
-        if resp.status_code != 200:
-            raise RuntimeError(f"Collection lookup failed: {resp.status_code}")
-        _collection_id = resp.json()["id"]
-    return _collection_id
-
-
-def query_chromadb(embedding: list[float]) -> list[dict]:
-    """Query ChromaDB with full-scan, return top N_RESULTS by distance.
-
-    Bypasses HNSW approximation by requesting the entire collection, then
-    selects the closest N_RESULTS candidates for downstream reranking.
-    On collections under ~1000 vectors the overhead is ~2 ms."""
-    client = httpx.Client(timeout=30)
-    resp = None
-    for attempt in range(2):
-        collection_id = get_collection_id(force_refresh=(attempt > 0))
-        count_resp = client.get(f"{CHROMA_BASE}/collections/{collection_id}/count")
-        if count_resp.status_code != 200:
-            raise RuntimeError(f"ChromaDB count error {count_resp.status_code}")
-        n_results = count_resp.json()
-        if not isinstance(n_results, int) or n_results < 1:
-            return []
-        resp = client.post(
-            f"{CHROMA_BASE}/collections/{collection_id}/query",
-            json={
-                "query_embeddings": [embedding],
-                "n_results": n_results,
-                "include": ["distances", "documents", "metadatas"],
-            },
-        )
-        if resp.status_code != 404:
-            break
-
-    if resp.status_code != 200:
-        raise RuntimeError(f"ChromaDB error {resp.status_code}: {resp.text}")
-
-    data = resp.json()
-
-    if not data.get("ids") or not data["ids"][0]:
-        return []
-
-    results = []
-    ids_ = data["ids"][0]
-    distances = data.get("distances", [[]])[0]
-    metadatas = data.get("metadatas", [[]])[0]
-
-    for i, entry_id in enumerate(ids_):
-        dist = distances[i] if i < len(distances) else 0
-        if dist > MAX_DISTANCE:
-            continue
-
-        meta = metadatas[i] if i < len(metadatas) else {}
-        results.append({
-            "id": str(entry_id),
-            "distance": round(dist, 4),
-            "title": meta.get("title", ""),
-            "tags": meta.get("tags", ""),
-            "source": meta.get("raw_path", ""),
-        })
-
-    results.sort(key=lambda item: item["distance"])
-    return results[:N_RESULTS]
-
-
-# --- sqlite enrichment ---
-def fetch_metadata(results: list[dict]) -> list[SearchResult]:
-    """Enrich ChromaDB results with full content and metadata from SQLite."""
-    if not results:
-        return []
-
-    ids = [r["id"] for r in results]
-    placeholders = ",".join("?" * len(ids))
-
-    db = sqlite3.connect(DB_PATH)
-    db.row_factory = sqlite3.Row
-    rows = db.execute(
-        f"SELECT id, title, content, summary, tags, created_at FROM entries WHERE id IN ({placeholders})",
-        ids,
-    ).fetchall()
-    db.close()
-
-    row_map = {str(row["id"]): row for row in rows}
-
-    enriched = []
-    for r in results:
-        row = row_map.get(r["id"])
-        if not row:
-            # ChromaDB has it but SQLite doesn't (unlikely — handle gracefully)
-            enriched.append(SearchResult(
-                id=int(r["id"]),
-                title=r["title"],
-                tags=r["tags"],
-                distance=r["distance"],
-            ))
-            continue
-        enriched.append(SearchResult(
-            id=row["id"],
-            title=row["title"],
-            content=row["content"],
-            summary=row["summary"],
-            tags=row["tags"] or r.get("tags", ""),
-            source=r.get("source", ""),
-            date=row["created_at"],
-            distance=r["distance"],
-        ))
-
-    # Sort by distance (ChromaDB already sorts, defensive)
-    enriched.sort(key=lambda x: x.distance)
-    return enriched
-
-
-# --- cross-encoder reranking ---
-def _rerank(query: str, results: list[SearchResult]) -> list[SearchResult]:
-    """Rerank results using cross-encoder for semantic relevance.
-    Operates on first ~1500 chars of content (well within ms-marco 512-token limit).
-    Fails closed with RerankerUnavailable if the model cannot score."""
-    if not results:
-        return results
-
-    if rerank_model is None:
-        raise RerankerUnavailable("cross-encoder model was not loaded")
-
-    try:
-        pairs = [(query, (r.content or r.summary or "")[:1500]) for r in results]
-        raw_scores = rerank_model.predict(pairs)
-
-        for i, score in enumerate(raw_scores):
-            results[i].relevance = round(_sigmoid(float(score)), 4)
-
-        results.sort(key=lambda x: -x.relevance)
-        return results
-
-    except Exception as e:
-        print(f"[rerank] Cross-encoder error: {e}, failing closed", flush=True)
-        raise RerankerUnavailable(str(e)) from e
-
-
-# --- time decay (applied AFTER rerank as recency correction) ---
-def _apply_decay(results: list[SearchResult]) -> list[SearchResult]:
-    """Multiply relevance by rational time decay: final = relevance × max(1/(1+days/540), 0.3)"""
-    if not results:
-        return results
-
-    now = datetime.now(timezone.utc)
-    for r in results:
-        days_old = 0.0
-        if r.date:
-            try:
-                created = datetime.fromisoformat(r.date)
-                if created.tzinfo is None:
-                    created = created.replace(tzinfo=timezone.utc)
-                days_old = (now - created).total_seconds() / 86400.0
-            except (ValueError, TypeError):
-                pass
-        decay = 1.0 / (1.0 + max(days_old, 0) / DECAY_HALF_LIFE)
-        decay = max(decay, DECAY_FLOOR)
-        r.final_score = round(r.relevance * decay, 4)
-
-    results.sort(key=lambda x: -x.final_score)
-    return results
-
-
-# --- full pipeline ---
-def _do_search(query: str) -> list[SearchResult]:
-    """Layer 1: ChromaDB recall → Layer 2: cross-encoder rerank → Layer 3: decay → Layer 4: cutoff"""
-    embedding = embed_query(query)
-    raw = query_chromadb(embedding)
-    results = fetch_metadata(raw)
-
-    if not results:
-        return []
-
-    # Layer 2: cross-encoder reranking (fails closed — see RerankerUnavailable)
-    results = _rerank(query, results)
-
-    # Layer 3: time decay as recency correction (affects ordering, not inclusion)
-    results = _apply_decay(results)
-
-    # Layer 4: threshold on relevance (pre-decay), then cap
-    passed = [r for r in results if r.relevance >= RERANK_THRESHOLD]
-    return passed
-
-
 def _synthesis_context(req: NexusRelevanceRequest, results: list[Candidate]) -> dict:
     return {
         "task": (
