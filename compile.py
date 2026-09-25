@@ -10,48 +10,32 @@ import sqlite3, os, re, json, tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+import corpora  # corpus identity (same dir: /opt/kb)
 import supersede_index  # supersede link index (same dir: /opt/kb)
 
 # --- configuration ---
-CORPUS_PROFILES = {
-    "homelab": {
-        "root": "/opt/kb",
-        "db": "/opt/kb/kb.db",
-        "raw": "/opt/kb/raw",
-        "env": "/opt/kb/.env",
-        "collection": "kb_collection",
-        "wiki_index": "/opt/kb/wiki/index.md",
-        "secret_patterns": "/opt/kb/secret_patterns.json",
-        "quarantine_dir": "/opt/kb/quarantine",
-        "quarantine_log": "/opt/kb/quarantine.log",
-        "watcher_lock": "/tmp/kb-watcher.lock",
-        "watcher_state": "/tmp/kb-watcher-last",
-    },
-    "ai": {
-        "root": "/opt/ai-kb",
-        "db": "/opt/ai-kb/ai-kb.db",
-        "raw": "/opt/ai-kb/raw",
-        "env": "/opt/ai-kb/.env",
-        "collection": "ai_kb_collection",
-        "wiki_index": "",
-        "secret_patterns": "/opt/ai-kb/secret_patterns.json",
-        "quarantine_dir": "/opt/ai-kb/quarantine",
-        "quarantine_log": "/opt/ai-kb/quarantine.log",
-        "watcher_lock": "/tmp/ai-kb-watcher.lock",
-        "watcher_state": "/tmp/ai-kb-watcher-last",
-    },
-}
+# Corpus identity lives in corpora.py so a path or collection name has one
+# definition; profiles() returns a copy because the isolation override below
+# mutates it.
+CORPUS_PROFILES = corpora.profiles()
 
-ISOLATION_VARS = ("KB_HOMELAB_DB", "KB_AI_DB", "KB_HOMELAB_RAW", "KB_AI_RAW")
+ISOLATION_VARS = (
+    "KB_HOMELAB_DB", "KB_HOMELAB_RAW", "KB_HOMELAB_QUARANTINE", "KB_HOMELAB_ENV",
+    "KB_AI_DB", "KB_AI_RAW", "KB_AI_QUARANTINE", "KB_AI_ENV",
+)
 
 
 def _apply_isolation_env():
     """All-or-nothing storage override, mirrored in corpus.go (isolationOverride).
     If any var is set, ALL must be — an isolated run (tests, the Go entry-point
     test) can never fall through to a production path. The Go binary and every
-    compile.py subprocess it spawns read the SAME four vars, so resolved paths
-    stay identical across the process boundary. Raw is overridden per corpus
-    because the corpora keep separate raw roots in production."""
+    compile.py subprocess it spawns read the SAME vars, so resolved paths stay
+    identical across the process boundary (bound by tests/test_isolation_contract.py).
+
+    The set covers every path a run can write: the corpus database, the raw tree,
+    the quarantine directory with its audit log, and the environment file. Raw is
+    overridden per corpus because the corpora keep separate raw roots in
+    production."""
     present = {k: os.environ.get(k, "").strip() for k in ISOLATION_VARS}
     if not any(present.values()):
         return
@@ -62,8 +46,19 @@ def _apply_isolation_env():
             f"{list(ISOLATION_VARS)} (missing {missing}); refusing production fallback")
     CORPUS_PROFILES["homelab"]["db"] = present["KB_HOMELAB_DB"]
     CORPUS_PROFILES["homelab"]["raw"] = present["KB_HOMELAB_RAW"]
+    CORPUS_PROFILES["homelab"]["quarantine_dir"] = present["KB_HOMELAB_QUARANTINE"]
+    CORPUS_PROFILES["homelab"]["env"] = present["KB_HOMELAB_ENV"]
     CORPUS_PROFILES["ai"]["db"] = present["KB_AI_DB"]
     CORPUS_PROFILES["ai"]["raw"] = present["KB_AI_RAW"]
+    CORPUS_PROFILES["ai"]["quarantine_dir"] = present["KB_AI_QUARANTINE"]
+    CORPUS_PROFILES["ai"]["env"] = present["KB_AI_ENV"]
+    # The audit log is the sibling of its directory in production
+    # (…/quarantine + …/quarantine.log), so deriving it keeps the whole quarantine
+    # path isolated once the directory is named.
+    for _corpus in ("homelab", "ai"):
+        CORPUS_PROFILES[_corpus]["quarantine_log"] = str(
+            Path(CORPUS_PROFILES[_corpus]["quarantine_dir"]).parent / "quarantine.log"
+        )
 
 
 KB = DB = WIKI = RAW = ENV_FILE = None

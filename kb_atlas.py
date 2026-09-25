@@ -22,9 +22,13 @@ from datetime import datetime, timezone
 import numpy as np
 import chromadb
 
+import corpora
+
+# Identity comes from the one definition (corpora.py); the shape kb_atlas reads is
+# {"homelab": {"collection": ..., "db": ...}}.
 CORPORA = {
-    "homelab": {"collection": "kb_collection", "db": "/opt/kb/kb.db"},
-    "ai": {"collection": "ai_kb_collection", "db": "/opt/ai-kb/ai-kb.db"},
+    name: {"collection": profile["collection"], "db": profile["db"]}
+    for name, profile in corpora.CORPORA.items()
 }
 CHROMA_HOST = "localhost"
 CHROMA_PORT = 8000
