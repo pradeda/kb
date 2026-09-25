@@ -33,7 +33,7 @@ must be verified live first, because services read `/opt/kb`.
 Everything else in this tree is canonical **here** and has no kb-go counterpart:
 `kb_v2.py`, `kb_search_api.py`, `mcp_server.py`, `gate.py`,
 `docker-compose.yml`, `corpus-router.yml`, `v2-clients.yml`, `contracts/`, `eval/`,
-`setup/`, `prompts/`, `mkdocs.yml`. `tests/test_compile_lock_race.py` and
+`setup/`, `mkdocs.yml`. `tests/test_compile_lock_race.py` and
 `tests/test_retire_orphan.py` are mirrored in kb-go and run there by `make test`;
 the rest of `tests/` lives only here — see [Tests](#tests) for the interpreter each
 file needs.
