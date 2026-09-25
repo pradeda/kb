@@ -12,7 +12,7 @@ Homelab knowledge base search backend — Python API, MCP server, ChromaDB embed
 | MCP server | `mcp_server.py` | system units `kb-mcp-sse` / `kb-mcp-http`; stdio clients |
 | FastEmbed daemon | `embed_daemon.py` | `/run/kb-embed/embed.sock` |
 | Compiler | `compile.py` | invoked by `kb-watcher` / `ai-kb-watcher`; owns the per-corpus mutating lock (`/tmp/kb-watcher.lock`, `/tmp/ai-kb-watcher.lock`) for every mutating mode — `watcher.sh` must not hold a shell `flock` on the same path, that deadlocks the child |
-| Corpus router | `corpus-router.yml` | config for search API |
+| Corpus router | `corpus-router.yml` | config for search API; the single source of the calibration values — `kb_v2.APPROVED_ROUTER_FINGERPRINT` pins their hash, so an edited threshold makes the service refuse to serve |
 | KB Atlas | `kb_atlas.py` + `atlas_template.html` | `:3085` (user units `kb-atlas` / `kb-atlas-rebuild.timer`); source of truth in [kb-go](https://github.com/pradeda/kb-go) `runtime/`, deployed via `make install` |
 
 ## Which files are owned here, and which are installed from kb-go

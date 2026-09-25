@@ -509,6 +509,64 @@ fts5:
             all(not item["ready"] for item in health.json()["corpora"].values())
         )
 
+    def test_the_approved_calibration_is_pinned_by_fingerprint(self) -> None:
+        """corpus-router.yml is the single source; the code carries a fingerprint, not a
+        second copy of the values. A changed threshold must be refused, and the service
+        must refuse to serve rather than search with an unapproved calibration."""
+        approved = kb_v2._load_router_config()
+        self.assertEqual(
+            kb_v2._router_fingerprint(approved), kb_v2.APPROVED_ROUTER_FINGERPRINT
+        )
+
+        original = self.router_config.read_text(encoding="utf-8")
+        cases = {
+            # A threshold that still satisfies the internal consistency rules, so the
+            # refusal comes from the calibration pin and not from shape validation.
+            "threshold": original.replace("  homelab: 0.60", "  homelab: 0.62", 1),
+            "candidate budget": original.replace("candidate_k: 25", "candidate_k: 26", 1),
+            "fts5 lane": original.replace("semantic_k: 20", "semantic_k: 19", 1),
+            "decay": original.replace(
+                "ai_decay:\n  mode: disabled",
+                "ai_decay:\n  mode: rational\n  half_life_days: 540\n  floor: 0.3",
+                1,
+            ),
+        }
+        for label, text in cases.items():
+            self.assertNotEqual(text, original, label)
+            deviating = Path(self.temp.name) / f"deviating-{label.replace(' ', '-')}.yml"
+            deviating.write_text(text, encoding="utf-8")
+            os.chmod(deviating, 0o600)
+            with patch.dict(os.environ, {"KB_CORPUS_ROUTER_CONFIG": str(deviating)}):
+                with self.assertRaisesRegex(
+                    RuntimeError, "deviates from the approved calibration"
+                ):
+                    kb_v2._load_router_config()
+                client = TestClient(create_v2_app(self.embed, lambda: self.reranker))
+                search = client.post(
+                    "/kb/search", headers=self.headers, json=self.request("homelab")
+                )
+                health = client.get("/health", headers=self.headers)
+            self.assertEqual(search.status_code, 503, label)
+            self.assertEqual(
+                search.json()["detail"]["reason"], "router_config_unavailable", label
+            )
+            self.assertEqual(health.json()["status"], "degraded", label)
+            self.assertTrue(
+                all(not item["ready"] for item in health.json()["corpora"].values()), label
+            )
+
+    def test_the_calibration_pin_ignores_comments_and_formatting(self) -> None:
+        """Only the values are pinned: a comment or a blank line is not a deviation."""
+        original = self.router_config.read_text(encoding="utf-8")
+        commented = Path(self.temp.name) / "commented-router.yml"
+        commented.write_text("# calibration review 2026-09-25\n" + original + "\n", encoding="utf-8")
+        os.chmod(commented, 0o600)
+        with patch.dict(os.environ, {"KB_CORPUS_ROUTER_CONFIG": str(commented)}):
+            self.assertEqual(
+                kb_v2._router_fingerprint(kb_v2._load_router_config()),
+                kb_v2.APPROVED_ROUTER_FINGERPRINT,
+            )
+
     def test_runtime_config_validation_rejects_unsafe_auth_and_nonfinite_values(self) -> None:
         client_path = Path(os.environ["KB_V2_CLIENTS_CONFIG"])
         os.chmod(client_path, 0o644)
@@ -552,7 +610,7 @@ fts5:
         )
         os.chmod(rebound_router, 0o600)
         with patch.dict(os.environ, {"KB_CORPUS_ROUTER_CONFIG": str(rebound_router)}):
-            with self.assertRaisesRegex(RuntimeError, "not bound"):
+            with self.assertRaisesRegex(RuntimeError, "deviates from the approved calibration"):
                 kb_v2._load_router_config()
 
         invalid_utf8_clients = Path(self.temp.name) / "invalid-utf8-clients.yml"

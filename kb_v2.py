@@ -8,6 +8,7 @@ v1 route/model surface unchanged while allowing one process to serve both APIs.
 from __future__ import annotations
 
 import atexit
+import hashlib
 import hmac
 import json
 import math
@@ -52,6 +53,17 @@ CHROMA_BASE = "http://localhost:8000/api/v2/tenants/default_tenant/databases/def
 CLIENT_CONFIG_PATH = "/opt/kb/v2-clients.yml"
 ROUTER_CONFIG_PATH = "/opt/kb/corpus-router.yml"
 PRECALIBRATION_ROUTER_VERSION = "corpus-router-v2-fts5-hybrid"
+# The approved calibration is pinned as a fingerprint of the effective values, not as a
+# second copy of them (the copy used to live here as `expected_precalibration`, which is
+# the duplication corpus-router.yml is meant to avoid). Any change to a threshold,
+# candidate budget, decay or FTS5 setting changes this hash and the service refuses to
+# serve - equally strict, one source. To approve a deliberate recalibration, update
+# corpus-router.yml, then:
+#   cd /opt/kb && python3 -c "import yaml, kb_v2; \
+#     print(kb_v2._router_fingerprint(kb_v2._parse_router_config( \
+#       yaml.safe_load(open('/opt/kb/corpus-router.yml', encoding='utf-8')))))"
+# and paste the result here.
+APPROVED_ROUTER_FINGERPRINT = "63c2abb0bd4c28c833da4739fbccfff40d7289a531703550a1baf52dc2ebac8c"
 HOMELAB_DECAY_HALF_LIFE = 540.0
 HOMELAB_DECAY_FLOOR = 0.30
 SUPERSEDE_DEMOTE = 0.1  # final_score multiplier for [SUPERSEDED] entries — demotes without
@@ -524,6 +536,12 @@ def _number(value, name: str, minimum: float, maximum: float) -> float:
 
 
 def _load_router_config() -> RouterConfig:
+    """Read, validate and pin-check the router configuration.
+
+    corpus-router.yml is the single source of the calibration values; this function
+    refuses to return a configuration that deviates from the approved fingerprint, so an
+    edited threshold cannot silently change what the pipeline means.
+    """
     path = _router_config_path()
     try:
         file_stat = os.stat(path)
@@ -533,6 +551,38 @@ def _load_router_config() -> RouterConfig:
             document = yaml.safe_load(handle)
     except (OSError, UnicodeError, yaml.YAMLError) as exc:
         raise RuntimeError("router config is unavailable") from exc
+    config = _parse_router_config(document)
+    actual = _router_fingerprint(config)
+    if (
+        config.router_version != PRECALIBRATION_ROUTER_VERSION
+        or actual != APPROVED_ROUTER_FINGERPRINT
+    ):
+        raise RuntimeError(
+            "router config deviates from the approved calibration: "
+            f"version={config.router_version!r} fingerprint={actual}"
+        )
+    return config
+
+
+def _router_fingerprint(config: RouterConfig) -> str:
+    """Canonical hash of the effective calibration values (no comments, no formatting)."""
+    payload = {
+        "router_version": config.router_version,
+        "accept_thresholds": dict(sorted(config.accept_thresholds.items())),
+        "reject_threshold": config.reject_threshold,
+        "both_margin": config.both_margin,
+        "dead_zone": [config.dead_zone_lower, config.dead_zone_upper],
+        "candidate_k": config.candidate_k,
+        "max_distance": dict(sorted(config.max_distance.items())),
+        "ai_decay": [config.ai_decay_mode, config.ai_decay_half_life_days, config.ai_decay_floor],
+        "fts5": [config.fts5_enabled, config.fts5_semantic_k, config.fts5_lexical_k],
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _parse_router_config(document) -> RouterConfig:
+    """Validate one parsed router document and build the config (no pin check)."""
     required = {
         "router_version",
         "accept_thresholds",
@@ -633,23 +683,6 @@ def _load_router_config() -> RouterConfig:
         fts5_semantic_k=fts5_semantic_k,
         fts5_lexical_k=fts5_lexical_k,
     )
-    expected_precalibration = {
-        "accept_thresholds": {"homelab": 0.60, "ai": 0.60},
-        "reject_threshold": 0.40,
-        "both_margin": 0.05,
-        "dead_zone_lower": 0.40,
-        "dead_zone_upper": 0.60,
-        "candidate_k": 25,
-        "max_distance": {"homelab": 0.60, "ai": 0.60},
-        "ai_decay_mode": "disabled",
-        "fts5_enabled": True,
-        "fts5_semantic_k": 20,
-        "fts5_lexical_k": 5,
-    }
-    if config.router_version != PRECALIBRATION_ROUTER_VERSION or any(
-        getattr(config, key) != value for key, value in expected_precalibration.items()
-    ):
-        raise RuntimeError("router version is not bound to the approved effective values")
     return config
 
 
