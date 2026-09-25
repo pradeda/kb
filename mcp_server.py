@@ -11,6 +11,8 @@ from pydantic import Field
 
 from mcp.server.fastmcp import FastMCP
 
+import corpora as corpus_identity  # single corpus-identity definition
+
 # SSE / Streamable HTTP transport — host/port passed to FastMCP constructor
 # (env vars are overridden by explicit params, so we pass them directly)
 _sse_mode   = "--sse"  in sys.argv
@@ -48,7 +50,8 @@ _AI_SUMMARY_RE = re.compile(
 )
 _SOURCE_RE = re.compile(r"^Source: *(.+)$", re.M)
 
-KB_DATABASES = {"homelab": "/opt/kb/kb.db", "ai": "/opt/ai-kb/ai-kb.db"}
+# Corpus identity comes from corpora.py (same directory in the deployment).
+KB_DATABASES = corpus_identity.databases()
 
 
 def _ai_brief(content: str) -> str:

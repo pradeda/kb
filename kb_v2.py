@@ -26,6 +26,8 @@ from datetime import datetime, timezone
 from typing import Callable, Literal, Optional
 from urllib.parse import urlparse
 
+import corpora as corpus_identity  # single corpus-identity definition
+
 import httpx
 import yaml
 from fastapi import Depends, FastAPI, HTTPException
@@ -337,15 +339,11 @@ def _fts5_lookup(
         return []
 
 
+# Corpus identity comes from corpora.py (deployed from kb-go with the rest of runtime/);
+# the shape kb_v2 reads is {"<corpus>": {"db_path": ..., "collection": ...}}.
 CORPUS_REGISTRY = {
-    "homelab": {
-        "db_path": "/opt/kb/kb.db",
-        "collection": "kb_collection",
-    },
-    "ai": {
-        "db_path": "/opt/ai-kb/ai-kb.db",
-        "collection": "ai_kb_collection",
-    },
+    name: {"db_path": profile["db"], "collection": profile["collection"]}
+    for name, profile in corpus_identity.CORPORA.items()
 }
 
 _collection_ids: dict[str, str] = {}

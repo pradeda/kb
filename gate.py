@@ -17,9 +17,12 @@ import re
 import socket
 import httpx
 
+import corpora as corpus_identity  # single corpus-identity definition
+
 EMBED_SOCKET = "/run/kb-embed/embed.sock"
 CHROMA_BASE = "http://localhost:8000/api/v2/tenants/default_tenant/databases/default_database"
-CHROMA_COLLECTION = "kb_collection"
+# Corpus identity comes from corpora.py; the gate only scores against homelab.
+CHROMA_COLLECTION = corpus_identity.collections()["homelab"]
 
 # Generic/structural tags+tokens that carry no topic signal — never count as overlap.
 STOP = {
