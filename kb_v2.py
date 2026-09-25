@@ -7,11 +7,13 @@ v1 route/model surface unchanged while allowing one process to serve both APIs.
 
 from __future__ import annotations
 
+import atexit
 import hmac
 import json
 import math
 import os
 import re
+import shutil
 import sqlite3
 import stat
 import tempfile
@@ -83,6 +85,9 @@ def _private_fts5_directory() -> str:
     global _private_fts5_dir
     if _private_fts5_dir is None:
         _private_fts5_dir = tempfile.mkdtemp(prefix="kb-fts5-private-")
+        # The directory is scratch for one process; without this every importing
+        # tool and every test run left another one in /tmp forever.
+        atexit.register(shutil.rmtree, _private_fts5_dir, ignore_errors=True)
     return _private_fts5_dir
 
 

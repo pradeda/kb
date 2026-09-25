@@ -157,6 +157,33 @@ class Fts5IndexIsolationTests(unittest.TestCase):
         self.assertEqual(sorted(target.glob("*.db")) if target.exists() else [], [])
 
 
+    def test_private_index_directory_does_not_outlive_the_process(self) -> None:
+        """A caller that names no directory gets a private one - it must not leak.
+
+        The private directory is created with mkdtemp and was never removed, so
+        every importing tool and every test run left a /tmp/kb-fts5-private-*
+        directory behind for the lifetime of the machine.
+        """
+        program = (
+            "import os, kb_v2\n"
+            "print(os.path.dirname(kb_v2._fts5_index_path('homelab')))\n"
+        )
+        environment = {key: value for key, value in os.environ.items() if key != "KB_FTS5_DIR"}
+        completed = subprocess.run(
+            [sys.executable, "-c", program],
+            cwd=str(Path(__file__).parents[1]),
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        private_dir = Path(completed.stdout.strip().splitlines()[-1])
+        self.assertIn("kb-fts5-private-", private_dir.name)
+        self.assertFalse(
+            private_dir.exists(), f"{private_dir} outlived the process that created it"
+        )
+
 class Fts5DegradationTests(unittest.TestCase):
     """A broken lexical index is reported, not swallowed."""
 
