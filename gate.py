@@ -118,8 +118,6 @@ def _chroma_query(embedding: list) -> list:
     metas = data.get("metadatas", [[]])[0]
     out = []
     for i, eid in enumerate(ids_):
-        if str(eid).startswith("gemini_"):
-            continue
         meta = metas[i] if i < len(metas) else {}
         out.append({
             "id": str(eid),

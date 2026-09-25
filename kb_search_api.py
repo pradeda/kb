@@ -312,8 +312,6 @@ def query_chromadb(embedding: list[float]) -> list[dict]:
     metadatas = data.get("metadatas", [[]])[0]
 
     for i, entry_id in enumerate(ids_):
-        if entry_id.startswith("gemini_"):
-            continue
         dist = distances[i] if i < len(distances) else 0
         if dist > MAX_DISTANCE:
             continue
