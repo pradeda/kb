@@ -47,13 +47,13 @@ one interpreter does not run everything:
 
 | Interpreter | Files | What they pin |
 |---|---|---|
-| `/opt/kb/venv-search/bin/python3` | `test_v1_contract.py`, `test_v2_contract.py`, `test_nexus_synthesis.py`, `test_provision_v2.py`, `test_fts5_hybrid.py` | v1 response and OpenAPI surface, the v2 routing/union/rerank/auth contract, Nexus synthesis prompt and provenance rules, `provision_v2.py`, the FTS5 index path/degradation/merge rules |
+| `/opt/kb/venv-search/bin/python3` | `test_root_retirement.py`, `test_v2_contract.py`, `test_nexus_synthesis.py`, `test_provision_v2.py`, `test_fts5_hybrid.py` | the unconditional 410 tombstones that replaced the retired v1 surface, the v2 routing/union/rerank/auth contract, Nexus synthesis prompt and provenance rules, `provision_v2.py`, the FTS5 index path/degradation/merge rules |
 | `/opt/kb/venv/bin/python3` | `test_mcp_*.py` | `mcp_server.py` tool names, transports, v2 payloads; `semantic_search`/`kb_get` shaping |
 | any (kb-go `make test` uses `/usr/bin/python3`) | `test_compile_lock_race.py`, `test_retire_orphan.py` | compile.py mutating lock, retire/pass race |
 
 ```bash
 cd /opt/kb
-/opt/kb/venv-search/bin/python3 -m unittest tests.test_v1_contract tests.test_v2_contract \
+/opt/kb/venv-search/bin/python3 -m unittest tests.test_root_retirement tests.test_v2_contract \
     tests.test_nexus_synthesis tests.test_provision_v2 tests.test_fts5_hybrid
 /opt/kb/venv/bin/python3 -m unittest discover -s tests -p 'test_mcp_*.py'
 /usr/bin/python3 -m unittest discover -s tests -p 'test_compile_lock_race.py'

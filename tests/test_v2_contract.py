@@ -664,9 +664,7 @@ fts5:
                 for option in generated_result["properties"]["public_source_url"]["anyOf"]
             )
         )
-        root = kb_search_api.create_root_app(
-            v1_enabled=False, fts5_dir=self.temp.name
-        ).openapi()
+        root = kb_search_api.create_root_app(fts5_dir=self.temp.name).openapi()
         self.assertNotIn("/v2/kb/search", root["paths"])
 
 

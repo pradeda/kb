@@ -23,8 +23,6 @@ N_RESULTS = 25               # broad recall before reranking (was 10)
 RERANK_THRESHOLD = 0.40      # minimum cross-encoder relevance to include a result (applied pre-decay)
 DECAY_HALF_LIFE = 540.0      # days (~1.5yr) — conservative for homelab technical docs
 DECAY_FLOOR = 0.3            # minimum decay multiplier (entry never drops below 30%)
-TOP_FULL = 5                 # cap for full format
-TOP_WEBSEARCH = 3            # cap for Open WebUI format
 # Multilingual sibling of ms-marco-MiniLM (same MS MARCO lineage, trained on the
 # translated mMARCO set). The English-only predecessor scored Serbian queries against
 # English AI-corpus documents at ~0, which made that corpus unreachable for ~62% of
@@ -44,20 +42,6 @@ SYNTHESIS_PROMPT_VERSION = "nexus-relevance-v3"
 
 # --- global model reference (loaded at startup) ---
 rerank_model = None
-
-
-def _parse_v1_search_enabled(raw: Optional[str]) -> bool:
-    """Parse the retirement switch without truthy-string surprises."""
-    if raw is None:
-        return False
-    value = raw.strip().lower()
-    if value == "true":
-        return True
-    if value == "false":
-        return False
-    raise RuntimeError(
-        f"invalid KB_V1_SEARCH_ENABLED={raw!r}; expected exactly true or false"
-    )
 
 
 def _parse_bilingual_union_enabled(raw: Optional[str]) -> bool:
@@ -140,11 +124,6 @@ async def _reranker_unavailable_handler(request, exc: RerankerUnavailable):
     return JSONResponse(status_code=503, content={"detail": {"reason": "reranker_unavailable"}})
 
 
-class SearchRequest(BaseModel):
-    query: str
-    format: str = "full"  # "full" → SearchResponse, "websearch" → Open WebUI format
-
-
 class SearchResult(BaseModel):
     id: int
     title: Optional[str] = None
@@ -156,12 +135,6 @@ class SearchResult(BaseModel):
     distance: float = 0.0          # original cosine distance (lower = better)
     relevance: float = 0.0         # cross-encoder relevance score [0, 1]
     final_score: float = 0.0       # relevance × decay
-
-
-class SearchResponse(BaseModel):
-    results: list[SearchResult]
-    query: str
-    count: int
 
 
 class NexusRelevanceRequest(BaseModel):
@@ -448,18 +421,6 @@ def _do_search(query: str) -> list[SearchResult]:
     return passed
 
 
-def _to_websearch(results: list[SearchResult]) -> list[dict]:
-    """Convert SearchResult list to Open WebUI websearch format."""
-    return [
-        {
-            "title": r.title or "Untitled",
-            "snippet": (r.content or r.summary or "")[:3000],
-            "link": r.source or f"kb://{r.id}",
-        }
-        for r in results
-    ]
-
-
 def _synthesis_context(req: NexusRelevanceRequest, results: list[SearchResult]) -> dict:
     return {
         "task": (
@@ -598,27 +559,6 @@ def _authorize_synthesis(token: Optional[str]) -> None:
 
 
 # --- endpoints ---
-def kb_search(req: SearchRequest):
-    """Semantic search over KB. format=full (default) or format=websearch for Open WebUI.
-
-    Plain def (not async): the pipeline is fully blocking (unix socket, sync httpx,
-    CPU rerank) — FastAPI runs plain-def endpoints in a threadpool, so one slow
-    search no longer freezes the event loop."""
-    results = _do_search(req.query)
-
-    cap = TOP_WEBSEARCH if req.format == "websearch" else TOP_FULL
-    if len(results) > cap:
-        results = results[:cap]
-
-    if req.format == "websearch":
-        return _to_websearch(results)
-    return SearchResponse(
-        results=results,
-        query=req.query,
-        count=len(results),
-    )
-
-
 def kb_synthesize_nexus_relevance(
     req: NexusRelevanceRequest,
     x_kb_synthesis_token: Optional[str] = Header(default=None),
@@ -694,21 +634,13 @@ def health():
     return {"status": "ok", "rerank_model": RERANK_MODEL if rerank_model is not None else "unavailable"}
 
 
-def kb_websearch(req: SearchRequest):
-    """[DEPRECATED] Use /kb/search with {"format": "websearch"}."""
-    results = _do_search(req.query)
-    if len(results) > TOP_WEBSEARCH:
-        results = results[:TOP_WEBSEARCH]
-    return _to_websearch(results)
-
-
 def _v1_gone(request: Request):
     """Unconditional tombstone: body validation must never pre-empt the 410."""
     raise HTTPException(status_code=410, detail="KB Search v1 is retired")
 
 
 def create_root_app(
-    v1_enabled: bool, union_enabled: bool = False, fts5_dir: str | None = None
+    union_enabled: bool = False, fts5_dir: str | None = None
 ) -> FastAPI:
     root = FastAPI(
         title="KB Search API",
@@ -716,12 +648,11 @@ def create_root_app(
         lifespan=lifespan,
     )
     root.add_exception_handler(RerankerUnavailable, _reranker_unavailable_handler)
-    if v1_enabled:
-        root.post("/kb/search")(kb_search)
-        root.post("/kb/websearch")(kb_websearch)
-    else:
-        root.post("/kb/search", include_in_schema=False)(_v1_gone)
-        root.post("/kb/websearch", include_in_schema=False)(_v1_gone)
+    # The v1 search surface is retired for good: it answered without authentication
+    # and the 2026-08-12 audit found no caller. The tombstones are unconditional, so
+    # no environment switch can bring the endpoints back.
+    root.post("/kb/search", include_in_schema=False)(_v1_gone)
+    root.post("/kb/websearch", include_in_schema=False)(_v1_gone)
     root.post(
         "/kb/synthesize/nexus-relevance",
         response_model=NexusRelevanceResponse,
@@ -737,7 +668,6 @@ def create_root_app(
     return root
 
 
-V1_SEARCH_ENABLED = _parse_v1_search_enabled(os.getenv("KB_V1_SEARCH_ENABLED"))
 UNION_ENABLED = _parse_bilingual_union_enabled(os.getenv("KB_BILINGUAL_UNION_ENABLED"))
 
 
@@ -750,7 +680,6 @@ if __name__ == "__main__":
     # import it). ExecStart runs this file as a script, so the service is unaffected.
     # The service is the one caller that opts into the shared, documented location.
     app = create_root_app(
-        V1_SEARCH_ENABLED,
         UNION_ENABLED,
         fts5_dir=os.getenv(FTS5_DIR_ENV) or DEFAULT_FTS5_DIR,
     )
