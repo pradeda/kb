@@ -291,11 +291,7 @@ def render_history_text(result):
 # The functions above are storage-agnostic (they take a connection + callables).
 # The adapters below bind them to the real two-DB layout, but take EVERY path
 # explicitly (both corpus DBs AND the edges DB) so an isolated test can never
-# fall through to a production database. Nothing here hardcodes a prod path in
-# a code path; PROD_* are only defaults the CLI passes.
-
-PROD_DB_PATHS = {"homelab": "/opt/kb/kb.db", "ai": "/opt/ai-kb/ai-kb.db"}
-PROD_EDGES_DB = "/opt/kb/kb.db"   # single shared cross-corpus edge index
+# fall through to a production database.
 
 
 def _iter_all_entries(db_paths):
@@ -350,23 +346,6 @@ def history_from_stores(edges_db, start, db_paths, limit=200):
     conn = sqlite3.connect(edges_db)
     try:
         return history(conn, start, _make_meta(db_paths), limit=limit)
-    finally:
-        conn.close()
-
-
-def supersede_write_edges(edges_db, src, dst_refs, db_paths):
-    """Validate (format handled by caller; existence across BOTH corpora, no
-    self, no cycle) then REPLACE the outgoing edge set for src. Returns error
-    list ([] = applied). Cross-corpus aware via db_paths + shared edges_db."""
-    ids = _known_ids(db_paths)
-    exists = lambda n: n in ids
-    conn = sqlite3.connect(edges_db)
-    try:
-        errors = validate_write(conn, src, dst_refs, exists)
-        if errors:
-            return errors
-        apply_write(conn, src, dst_refs)
-        return []
     finally:
         conn.close()
 
