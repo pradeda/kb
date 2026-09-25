@@ -55,14 +55,20 @@ else:
 
 _TMPROOT = pathlib.Path(tempfile.mkdtemp(prefix="kb-lock-tests-"))
 
-# compile.py refuses a partial isolation override at import time, so all four
-# vars are set. This is the sanctioned isolation path shared with the Go
-# entry-point test — never fall through to a production path from a test.
+# compile.py refuses a partial isolation override at import time, so the whole set
+# is provided. This is the sanctioned isolation path shared with the Go entry-point
+# test — never fall through to a production path from a test. The set covers the
+# database, the raw tree, the quarantine directory (and its audit log) and the env
+# file for each corpus.
 for _var, _sub in (
     ("KB_HOMELAB_DB", "homelab.db"),
-    ("KB_AI_DB", "ai.db"),
     ("KB_HOMELAB_RAW", "homelab-raw"),
+    ("KB_HOMELAB_QUARANTINE", "homelab-quarantine"),
+    ("KB_HOMELAB_ENV", "homelab.env"),
+    ("KB_AI_DB", "ai.db"),
     ("KB_AI_RAW", "ai-raw"),
+    ("KB_AI_QUARANTINE", "ai-quarantine"),
+    ("KB_AI_ENV", "ai.env"),
 ):
     os.environ.setdefault(_var, str(_TMPROOT / _sub))
 

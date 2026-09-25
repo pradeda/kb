@@ -64,7 +64,14 @@ class Bed:
         self.dir = tempfile.mkdtemp(prefix="kb-entrypoint-")
         self.homelab_raw = os.path.join(self.dir, "homelab-raw")
         self.ai_raw = os.path.join(self.dir, "ai-raw")
+        self.homelab_quarantine = os.path.join(self.dir, "quarantine")
+        self.ai_quarantine = os.path.join(self.dir, "ai-quarantine")
         os.makedirs(self.homelab_raw); os.makedirs(self.ai_raw)
+        os.makedirs(self.homelab_quarantine); os.makedirs(self.ai_quarantine)
+        self.homelab_env = os.path.join(self.dir, "homelab.env")
+        self.ai_env = os.path.join(self.dir, "ai.env")
+        for path in (self.homelab_env, self.ai_env):
+            open(path, "a").close()
         self.homelab_db = os.path.join(self.dir, "kb.db")
         self.ai_db = os.path.join(self.dir, "ai-kb.db")
         for p in (self.homelab_db, self.ai_db):
@@ -82,11 +89,16 @@ class Bed:
         e["KB_COMPILE_PY"] = RUNTIME_COMPILE
         e["KB_HOMELAB_DB"] = self.homelab_db
         e["KB_HOMELAB_RAW"] = self.homelab_raw
+        e["KB_HOMELAB_QUARANTINE"] = self.homelab_quarantine
+        e["KB_HOMELAB_ENV"] = self.homelab_env
         if complete:
             e["KB_AI_DB"] = self.ai_db
             e["KB_AI_RAW"] = self.ai_raw
+            e["KB_AI_QUARANTINE"] = self.ai_quarantine
+            e["KB_AI_ENV"] = self.ai_env
         else:
             e.pop("KB_AI_DB", None); e.pop("KB_AI_RAW", None)
+            e.pop("KB_AI_QUARANTINE", None); e.pop("KB_AI_ENV", None)
         return e
 
     def run(self, *args, complete=True):
