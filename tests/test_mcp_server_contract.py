@@ -142,6 +142,41 @@ class MCPServerContractTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, f"HTTP {status}: test_reason"):
                         namespace["corpus_search"]("query", "homelab", 5)
 
+    def test_supersede_routes_to_the_requested_corpus(self) -> None:
+        """An ai:<id> entry must never be superseded through the homelab profile.
+
+        `kb supersede` defaults to homelab, so without an explicit --corpus the
+        call either failed with "no such entry" or, when the same id exists in both
+        corpora, silently superseded the wrong homelab row.
+        """
+        namespace = self.load_server()
+        process = types.SimpleNamespace(returncode=0, stdout="Superseded successfully.", stderr="")
+        with patch("subprocess.run", return_value=process) as run:
+            namespace["supersede"](940, "ai:363", corpus="ai")
+        argv = run.call_args.args[0]
+        self.assertEqual(
+            argv,
+            ["/usr/local/bin/kb", "supersede", "--corpus", "ai", "940", "ai:363"],
+        )
+        self.assertEqual(run.call_args.kwargs["input"], "")
+
+    def test_supersede_defaults_to_the_homelab_corpus_explicitly(self) -> None:
+        namespace = self.load_server()
+        process = types.SimpleNamespace(returncode=0, stdout="Superseded successfully.", stderr="")
+        with patch("subprocess.run", return_value=process) as run:
+            namespace["supersede"](42, "homelab:323")
+        self.assertEqual(
+            run.call_args.args[0],
+            ["/usr/local/bin/kb", "supersede", "--corpus", "homelab", "42", "homelab:323"],
+        )
+
+    def test_supersede_reports_cli_failure(self) -> None:
+        namespace = self.load_server()
+        process = types.SimpleNamespace(returncode=1, stdout="", stderr="supersede homelab:42 — no such entry")
+        with patch("subprocess.run", return_value=process):
+            value = namespace["supersede"](42, "ai:363", corpus="ai")
+        self.assertIn("no such entry", value)
+
     def test_stdio_transport_contract(self) -> None:
         self.load_server(run_name="__main__")
         server = FakeFastMCP.instances[-1]

@@ -291,14 +291,21 @@ def add(
         "add). First find the old entry via semantic_search, then add the corrective "
         "entry, then call this with its reference. entry_id is the obsolete entry's numeric "
         "id; replacement is the KB reference(s) of the current entry, e.g. 'homelab:323'. "
+        "corpus selects which corpus entry_id belongs to (default homelab) and must match "
+        "the entry's own reference — an 'ai:<id>' entry needs corpus='ai', otherwise the "
+        "call fails with 'no such entry' or hits the homelab row with the same id. "
         "The old entry keeps its id and history, its title is prefixed [SUPERSEDED], and it "
-        "is demoted in search. Refuses if entry_id does not exist."
+        "is demoted in search. Refuses if entry_id does not exist in that corpus."
     )
 )
-def supersede(entry_id: int, replacement: str) -> str:
+def supersede(
+    entry_id: int,
+    replacement: str,
+    corpus: Literal["homelab", "ai"] = "homelab",
+) -> str:
     try:
         result = subprocess.run(
-            ["/usr/local/bin/kb", "supersede", str(entry_id), replacement],
+            ["/usr/local/bin/kb", "supersede", "--corpus", corpus, str(entry_id), replacement],
             input="",  # pipe stdin -> non-interactive (no y/N prompt); never blocks
             capture_output=True,
             text=True,
