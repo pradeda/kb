@@ -25,11 +25,18 @@ AI_CONTENT = (
 )
 
 
-def hit(corpus, entry_id, content="homelab body"):
-    return {
+def hit(corpus, entry_id, content="homelab body", newer_notes=None):
+    value = {
         "corpus": corpus, "entry_id": entry_id, "ref": f"{corpus}:{entry_id}",
         "title": f"{corpus} {entry_id}", "content": content, "tags": "t",
     }
+    if newer_notes is not None:
+        value["newer_notes"] = newer_notes
+    return value
+
+
+def note(ref, title, relation):
+    return {"ref": ref, "title": title, "relation": relation}
 
 
 def payload(ranked):
@@ -65,6 +72,41 @@ class MixedFormatTests(unittest.TestCase):
         brief = mcp_server._ai_brief("no sections here " * 200)
         self.assertLessEqual(len(brief), mcp_server.AI_BRIEF_MAX_CHARS + 2)
         self.assertTrue(brief.endswith("…"))
+
+    def test_newer_note_warning_is_rendered_below_the_result(self):
+        ranked = [
+            hit("homelab", 963, newer_notes=[
+                note("homelab:992", "Forrix Qwen per-model load defaults (updates homelab:963)",
+                     "updates")
+            ]),
+            hit("homelab", 964),
+        ]
+        text = mcp_server._format_corpus_payload(payload(ranked))
+        self.assertIn(
+            "\u26a0 newer note updates this: homelab:992 \u2014 Forrix Qwen per-model load "
+            "defaults (updates homelab:963)",
+            text,
+        )
+        # One line, under its own result, and never under a result without edges.
+        block_963 = text.split("[homelab:964]")[0]
+        self.assertEqual(block_963.count("\u26a0"), 1)
+        self.assertNotIn("\u26a0", text.split("[homelab:964]")[1])
+
+    def test_newer_note_warning_survives_compact_ai_mode(self):
+        ranked = [
+            hit("ai", 1, AI_CONTENT, newer_notes=[
+                note("ai:2", "A later brief (updates ai:1)", "updates")
+            ]),
+        ]
+        text = mcp_server._format_corpus_payload(payload(ranked), compact_ai=True)
+        self.assertIn("\u26a0 newer note updates this: ai:2 \u2014 A later brief (updates ai:1)", text)
+        self.assertIn("(brief \u2014 full text: kb_get('ai:1'))", text)
+        self.assertLess(text.index("kb_get('ai:1')"), text.index("\u26a0"))
+
+    def test_results_without_the_field_render_unchanged(self):
+        ranked = [hit("homelab", 1)]
+        text = mcp_server._format_corpus_payload(payload(ranked))
+        self.assertNotIn("\u26a0", text)
 
     def test_full_rendering_without_compaction(self):
         ranked = [hit("ai", 1, AI_CONTENT), hit("ai", 2, AI_CONTENT), hit("ai", 3, AI_CONTENT)]

@@ -77,6 +77,13 @@ def _render_hits(items: list, header: str, *, compact_ai: bool = False) -> list[
             lines.append(f"(brief — full text: kb_get('{item.get('ref')}'))")
         else:
             lines.append(content)
+        for note in item.get("newer_notes") or []:
+            if not isinstance(note, dict):
+                continue
+            lines.append(
+                f"⚠ newer note {note.get('relation')} this: {note.get('ref')} — "
+                f"{note.get('title')}"
+            )
         lines.append("")
     return lines
 
