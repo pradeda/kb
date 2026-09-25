@@ -95,13 +95,6 @@ async def lifespan(app: FastAPI):
         print(f"[startup] WARNING: Failed to load cross-encoder model: {e}", flush=True)
         print("[startup] Search will answer 503 reranker_unavailable until this is fixed.", flush=True)
 
-    # Warm the collection UUID cache (best-effort — resolved lazily on first query if chroma isn't up yet)
-    try:
-        get_collection_id()
-        print(f"[startup] Collection UUID cached: {_collection_id}", flush=True)
-    except Exception as e:
-        print(f"[startup] WARNING: collection UUID not resolved yet: {e}", flush=True)
-
     yield  # app runs here
 
     # Shutdown cleanup
