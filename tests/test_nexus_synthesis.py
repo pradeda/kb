@@ -11,6 +11,7 @@ from kb_search_api import (
     RerankerUnavailable,
     kb_synthesize_nexus_relevance,
     _call_synthesis_model,
+    _synthesis_model_from,
 )
 from kb_v2 import Candidate
 
@@ -193,8 +194,13 @@ class NexusSynthesisTests(unittest.TestCase):
         self.assertEqual([item.entry_id for item in response.supporting_entries], [400])
         self.assertIn("Sol, Terra and Luna", response.supporting_entries[0].match_reason)
 
-    def test_model_comes_from_the_environment_not_a_code_default(self) -> None:
-        """The deployed env file owns the model; the service invents nothing."""
+    def test_unset_model_variable_falls_back_to_the_built_in_default(self) -> None:
+        self.assertEqual(_synthesis_model_from(None), "google/gemini-2.5-flash-lite")
+        self.assertEqual(_synthesis_model_from("  "), "google/gemini-2.5-flash-lite")
+        self.assertEqual(_synthesis_model_from("vendor/x"), "vendor/x")
+
+    def test_empty_model_is_refused_before_any_request(self) -> None:
+        """A model patched to empty (not reachable from env) is still refused."""
         with patch.dict("os.environ", {"OPENROUTER_API_KEY": "test"}), patch(
             "kb_search_api.SYNTHESIS_MODEL", ""
         ), patch("kb_search_api.httpx.post") as post:

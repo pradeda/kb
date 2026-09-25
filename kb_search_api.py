@@ -27,10 +27,14 @@ EMBED_SOCKET = "/run/kb-embed/embed.sock"
 RERANK_MODEL = os.getenv("KB_RERANK_MODEL", "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1")
 # One knob for both synthesis call sites: this endpoint and the `kb ask` CLI read
 # the same KB_SYNTHESIS_MODEL (the CLI prefers its own OPENROUTER_MODEL, then this).
-# No literal default here on purpose - the deployed /opt/kb/.env owns the value, so a
-# model change is one edit, not a code change in two places. Unset means the endpoint
-# fails closed instead of inventing a model the operator did not choose.
-SYNTHESIS_MODEL = os.getenv("KB_SYNTHESIS_MODEL", "").strip()
+# Unset falls back to the same built-in default as kb-go's defaultModel, so a missing
+# env line never takes AI Ingest's enrichment down.
+DEFAULT_SYNTHESIS_MODEL = "google/gemini-2.5-flash-lite"
+def _synthesis_model_from(value: Optional[str]) -> str:
+    return (value or "").strip() or DEFAULT_SYNTHESIS_MODEL
+
+
+SYNTHESIS_MODEL = _synthesis_model_from(os.getenv("KB_SYNTHESIS_MODEL"))
 SYNTHESIS_URL = os.getenv(
     "KB_SYNTHESIS_URL", "https://openrouter.ai/api/v1/chat/completions"
 )
