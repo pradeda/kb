@@ -713,12 +713,6 @@ def _load_clients() -> list[tuple[AuthorizedClient, str]]:
     return resolved
 
 
-def authorize_v2(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
-) -> AuthorizedClient:
-    return _authorize_credentials(credentials, _load_clients())
-
-
 def _authorize_credentials(
     credentials: Optional[HTTPAuthorizationCredentials],
     configured_clients: list[tuple[AuthorizedClient, str]],
