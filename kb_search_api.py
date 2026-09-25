@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
-"""FastAPI service: POST /kb/search — semantic search over kb_collection with cross-encoder reranking."""
+"""FastAPI service: the authenticated multi-corpus v2 search plane, the MCP-facing
+health route, and the purpose-bound nexus synthesis endpoint.
+
+The v1 search surface (/kb/search, /kb/websearch) is retired and answers 410; its
+pipeline was removed once the nexus synthesis endpoint moved to the v2 lane."""
 
 import hmac, json, sqlite3, socket, math, os, time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Literal, Optional
+from typing import Callable, Literal, Optional
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from kb_v2 import DEFAULT_FTS5_DIR, FTS5_DIR_ENV, create_v2_app
+from kb_v2 import DEFAULT_FTS5_DIR, FTS5_DIR_ENV, Candidate, create_v2_app
 
 # --- config ---
 EMBED_SOCKET = "/run/kb-embed/embed.sock"
@@ -421,7 +425,7 @@ def _do_search(query: str) -> list[SearchResult]:
     return passed
 
 
-def _synthesis_context(req: NexusRelevanceRequest, results: list[SearchResult]) -> dict:
+def _synthesis_context(req: NexusRelevanceRequest, results: list[Candidate]) -> dict:
     return {
         "task": (
             "Classify related KB knowledge separately from operational relevance to Nexus."
@@ -436,7 +440,7 @@ def _synthesis_context(req: NexusRelevanceRequest, results: list[SearchResult]) 
         "kb_query": req.query,
         "kb_entries": [
             {
-                "entry_id": item.id,
+                "entry_id": item.entry_id,
                 "title": item.title or "Untitled",
                 "final_score": item.final_score,
                 "excerpt": (item.content or item.summary or "")[
@@ -558,12 +562,30 @@ def _authorize_synthesis(token: Optional[str]) -> None:
         raise HTTPException(status_code=401, detail="Invalid KB synthesis token")
 
 
+# Set by create_root_app to the v2 lane's homelab retriever (kb_v2 app state), so the
+# nexus synthesis endpoint retrieves through exactly the pipeline /v2/kb/search uses.
+_synthesis_retriever: Optional[Callable[[str], list[Candidate]]] = None
+
+
+def _synthesis_retrieval(query: str) -> list[Candidate]:
+    """Ranked homelab candidates for one synthesis query.
+
+    Fail-closed: an unwired or unavailable lane is a 503, never an empty result that
+    would read as "no related knowledge".
+    """
+    if _synthesis_retriever is None:
+        raise HTTPException(status_code=503, detail={"reason": "retrieval_unavailable"})
+    return _synthesis_retriever(query)
+
+
 # --- endpoints ---
 def kb_synthesize_nexus_relevance(
     req: NexusRelevanceRequest,
     x_kb_synthesis_token: Optional[str] = Header(default=None),
 ):
-    """Experimental, purpose-bound KB synthesis contract. Not exposed as an MCP tool."""
+    """Purpose-bound KB synthesis contract, fed by the v2 retrieval lane.
+
+    Not exposed as an MCP tool."""
     _authorize_synthesis(x_kb_synthesis_token)
     retrieval_started = time.perf_counter()
     min_score = (
@@ -571,9 +593,19 @@ def kb_synthesize_nexus_relevance(
         if req.source_type == "article"
         else SYNTHESIS_MIN_SCORE
     )
+    try:
+        candidates = _synthesis_retrieval(req.query)
+    except RuntimeError as exc:
+        # The v2 lane reports the reason it cannot retrieve; a missing cross-encoder
+        # keeps the documented reranker_unavailable body (see RerankerUnavailable).
+        if str(exc) == "reranker_unavailable":
+            raise RerankerUnavailable("cross-encoder model was not loaded") from exc
+        raise HTTPException(
+            status_code=503, detail={"reason": str(exc) or "retrieval_unavailable"}
+        ) from exc
     results = [
-        item for item in _do_search(req.query)
-        if item.final_score >= min_score
+        candidate for candidate in candidates
+        if candidate.final_score >= min_score
     ][:SYNTHESIS_MAX_RESULTS]
     retrieval_ms = round((time.perf_counter() - retrieval_started) * 1000, 1)
     provenance = SynthesisProvenance(retrieval_ms=retrieval_ms)
@@ -595,12 +627,12 @@ def kb_synthesize_nexus_relevance(
     try:
         value = _call_synthesis_model(_synthesis_context(req, results))
         answer, kb_match_confirmed, operational_relevance, evidence = _validate_synthesis(
-            value, {item.id for item in results}
+            value, {item.entry_id for item in results}
         )
     except (httpx.HTTPError, KeyError, TypeError, json.JSONDecodeError, RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=502, detail=f"KB synthesis failed: {exc}") from exc
     model_ms = round((time.perf_counter() - model_started) * 1000, 1)
-    by_id = {item.id: item for item in results}
+    by_id = {item.entry_id: item for item in results}
     status = (
         "operationally_relevant"
         if operational_relevance in {"direct", "indirect"}
@@ -662,9 +694,12 @@ def create_root_app(
 
     # Mounted sub-apps are intentionally absent from the parent OpenAPI schema.
     # The strict v2 contract is published separately at /v2/openapi.json.
-    root.mount(
-        "/v2", create_v2_app(embed_query, lambda: rerank_model, union_enabled, fts5_dir=fts5_dir)
-    )
+    v2 = create_v2_app(embed_query, lambda: rerank_model, union_enabled, fts5_dir=fts5_dir)
+    root.mount("/v2", v2)
+    # The nexus synthesis route retrieves through the v2 lane, not a private copy of
+    # the pipeline: same candidate build, same rerank pass, same decay rule.
+    global _synthesis_retriever
+    _synthesis_retriever = v2.state.retrieve_homelab
     return root
 
 

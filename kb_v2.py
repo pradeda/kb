@@ -1862,4 +1862,45 @@ def create_v2_app(
             "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
         }
 
+    def retrieve_homelab(query: str) -> list[Candidate]:
+        """Ranked homelab candidates for one query, by the same steps search_v2 runs.
+
+        Exposed on `app.state` because the nexus synthesis endpoint (a root-app route,
+        not part of this API surface) used to retrieve through the retired v1 pipeline.
+        Sharing this function is what keeps the two lanes from drifting: one candidate
+        build, one rerank pass, one decay rule.
+
+        Raises RuntimeError with a machine-readable reason ("router_config_unavailable",
+        "reranker_unavailable") so the caller can map it to the documented 503 body.
+        """
+        if router_snapshot is None:
+            raise RuntimeError("router_config_unavailable")
+        model = reranker()
+        if model is None:
+            raise RuntimeError("reranker_unavailable")
+        embedding = embed(query)
+        status: dict[str, str] = {}
+        candidates = _retrieve_corpus(
+            "homelab",
+            embedding,
+            router_snapshot,
+            None,
+            None,
+            fts5_indexes.get("homelab"),
+            query,
+            status,
+        )
+        _rerank_batch(query, candidates, model)
+        kept = [
+            candidate
+            for candidate in candidates
+            if candidate.relevance >= router_snapshot.reject_threshold
+        ]
+        for candidate in kept:
+            _apply_decay(candidate, router_snapshot)
+        kept.sort(key=lambda candidate: -candidate.final_score)
+        return kept
+
+    v2.state.retrieve_homelab = retrieve_homelab
+
     return v2

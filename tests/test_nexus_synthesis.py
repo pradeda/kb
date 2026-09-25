@@ -8,10 +8,11 @@ from fastapi import HTTPException
 
 from kb_search_api import (
     NexusRelevanceRequest,
-    SearchResult,
+    RerankerUnavailable,
     kb_synthesize_nexus_relevance,
     _call_synthesis_model,
 )
+from kb_v2 import Candidate
 
 
 def request() -> NexusRelevanceRequest:
@@ -24,14 +25,26 @@ def request() -> NexusRelevanceRequest:
     )
 
 
-def result(entry_id: int, score: float) -> SearchResult:
-    return SearchResult(
-        id=entry_id,
+def candidate(entry_id: int, score: float) -> Candidate:
+    """One ranked homelab candidate, as kb_v2's retrieval lane returns it."""
+    return Candidate(
+        corpus="homelab",
+        entry_id=entry_id,
         title=f"KB entry {entry_id}",
         content="x" * 3000,
+        summary=None,
+        tags=None,
+        source=None,
+        date=None,
+        distance=0.1,
         relevance=0.95,
         final_score=score,
     )
+
+
+def retriever(*items: Candidate):
+    """Patch target for the v2 retrieval lane the synthesis endpoint depends on."""
+    return patch("kb_search_api._synthesis_retriever", lambda query: list(items))
 
 
 class NexusSynthesisTests(unittest.TestCase):
@@ -58,9 +71,8 @@ class NexusSynthesisTests(unittest.TestCase):
                 {"entry_id": 401, "match_reason": "Same benchmark comparison."},
             ],
         }
-        with patch(
-            "kb_search_api._do_search",
-            return_value=[result(400, 0.91), result(401, 0.82), result(999, 0.59)],
+        with retriever(
+            candidate(400, 0.91), candidate(401, 0.82), candidate(999, 0.59)
         ), patch(
             "kb_search_api._call_synthesis_model", return_value=model_output
         ) as provider, patch.dict("os.environ", {"KB_SYNTHESIS_TOKEN": "test"}):
@@ -95,9 +107,7 @@ class NexusSynthesisTests(unittest.TestCase):
                 "match_reason": "Both cover the same model release.",
             }],
         }
-        with patch(
-            "kb_search_api._do_search", return_value=[result(400, 0.91)]
-        ), patch(
+        with retriever(candidate(400, 0.91)), patch(
             "kb_search_api._call_synthesis_model", return_value=model_output
         ) as provider, patch.dict("os.environ", {"KB_SYNTHESIS_TOKEN": "test"}):
             kb_synthesize_nexus_relevance(
@@ -116,9 +126,7 @@ class NexusSynthesisTests(unittest.TestCase):
                 "match_reason": "Both discuss adoption of open-weight models.",
             }],
         }
-        with patch(
-            "kb_search_api._do_search", return_value=[result(400, 0.51)]
-        ), patch(
+        with retriever(candidate(400, 0.51)), patch(
             "kb_search_api._call_synthesis_model", return_value=model_output
         ) as provider, patch.dict("os.environ", {"KB_SYNTHESIS_TOKEN": "test"}):
             response = kb_synthesize_nexus_relevance(
@@ -136,9 +144,7 @@ class NexusSynthesisTests(unittest.TestCase):
                 {"entry_id": 777, "match_reason": "Unavailable source."},
             ],
         }
-        with patch(
-            "kb_search_api._do_search", return_value=[result(400, 0.91)]
-        ), patch(
+        with retriever(candidate(400, 0.91)), patch(
             "kb_search_api._call_synthesis_model", return_value=model_output
         ), patch.dict("os.environ", {"KB_SYNTHESIS_TOKEN": "test"}):
             with self.assertRaises(HTTPException) as raised:
@@ -148,9 +154,7 @@ class NexusSynthesisTests(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 502)
 
     def test_no_strong_match_skips_model_call(self) -> None:
-        with patch(
-            "kb_search_api._do_search", return_value=[result(400, 0.59)]
-        ), patch(
+        with retriever(candidate(400, 0.59)), patch(
             "kb_search_api._call_synthesis_model"
         ) as provider, patch.dict("os.environ", {"KB_SYNTHESIS_TOKEN": "test"}):
             response = kb_synthesize_nexus_relevance(
@@ -176,9 +180,7 @@ class NexusSynthesisTests(unittest.TestCase):
                 "match_reason": "Both discuss the GPT-5.6 Sol, Terra and Luna model family.",
             }],
         }
-        with patch(
-            "kb_search_api._do_search", return_value=[result(400, 0.93)]
-        ), patch(
+        with retriever(candidate(400, 0.93)), patch(
             "kb_search_api._call_synthesis_model", return_value=model_output
         ), patch.dict("os.environ", {"KB_SYNTHESIS_TOKEN": "test"}):
             response = kb_synthesize_nexus_relevance(
@@ -191,9 +193,58 @@ class NexusSynthesisTests(unittest.TestCase):
         self.assertEqual([item.entry_id for item in response.supporting_entries], [400])
         self.assertIn("Sol, Terra and Luna", response.supporting_entries[0].match_reason)
 
+    def test_unwired_retrieval_lane_fails_closed(self) -> None:
+        """No retriever means 503, never an empty "no related knowledge" answer."""
+        with patch("kb_search_api._synthesis_retriever", None), patch(
+            "kb_search_api._call_synthesis_model"
+        ) as provider, patch.dict("os.environ", {"KB_SYNTHESIS_TOKEN": "test"}):
+            with self.assertRaises(HTTPException) as raised:
+                kb_synthesize_nexus_relevance(request(), x_kb_synthesis_token="test")
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(raised.exception.detail, {"reason": "retrieval_unavailable"})
+        provider.assert_not_called()
+
+    def test_missing_reranker_keeps_the_documented_reason(self) -> None:
+        """The v2 lane reports reranker_unavailable; the endpoint keeps that body."""
+        def broken(query: str):
+            raise RuntimeError("reranker_unavailable")
+
+        with patch("kb_search_api._synthesis_retriever", broken), patch(
+            "kb_search_api._call_synthesis_model"
+        ) as provider, patch.dict("os.environ", {"KB_SYNTHESIS_TOKEN": "test"}):
+            with self.assertRaises(RerankerUnavailable):
+                kb_synthesize_nexus_relevance(request(), x_kb_synthesis_token="test")
+        provider.assert_not_called()
+
+    def test_other_retrieval_failures_are_named_in_the_503(self) -> None:
+        def broken(query: str):
+            raise RuntimeError("router_config_unavailable")
+
+        with patch("kb_search_api._synthesis_retriever", broken), patch.dict(
+            "os.environ", {"KB_SYNTHESIS_TOKEN": "test"}
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                kb_synthesize_nexus_relevance(request(), x_kb_synthesis_token="test")
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(raised.exception.detail, {"reason": "router_config_unavailable"})
+
+    def test_root_app_wires_the_synthesis_lane_to_the_v2_retriever(self) -> None:
+        """The seam is the v2 app's own retriever, not a second implementation."""
+        import kb_search_api
+
+        with patch("kb_v2.Fts5Index.build", return_value=None):
+            kb_search_api.create_root_app()
+        try:
+            self.assertIsNotNone(kb_search_api._synthesis_retriever)
+            self.assertEqual(
+                kb_search_api._synthesis_retriever.__name__, "retrieve_homelab"
+            )
+        finally:
+            kb_search_api._synthesis_retriever = None
+
     def test_route_is_disabled_without_a_dedicated_token(self) -> None:
         with patch.dict("os.environ", {}, clear=True), patch(
-            "kb_search_api._do_search"
+            "kb_search_api._synthesis_retriever"
         ) as retrieval:
             with self.assertRaises(HTTPException) as raised:
                 kb_synthesize_nexus_relevance(
