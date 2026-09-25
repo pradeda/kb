@@ -888,6 +888,21 @@ def sanitize_secrets(content):
                 content = content[:start] + p["placeholder"] + content[end:]
     return content, hits
 
+def _quarantine_payload(orig_title, orig_summary, orig_content, new_title, new_summary):
+    """Pre-redaction text for the .orig backup.
+
+    The content is always included; every other original field the scanner mutated
+    is prefixed with its name, so a secret that lived only in the title (or the
+    summary) survives the redaction of the row and the raw file. Go Gate 1 renders
+    the same shape for the fields it has (quarantinePayload in secretscan.go)."""
+    parts = []
+    if orig_title != new_title:
+        parts.append(f"title: {orig_title or ''}")
+    if orig_summary != new_summary:
+        parts.append(f"summary: {orig_summary or ''}")
+    parts.append(orig_content or "")
+    return "\n\n".join(parts)
+
 def _record_quarantine(entry_id, orig_content, raw_path, hits):
     ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     bak = ""
@@ -930,7 +945,12 @@ def sanitize_unembedded(rows):
             db.execute("UPDATE entries SET content=?, title=?, summary=? WHERE id=?",
                        (new_content, new_title, new_summary, entry_id))
             db.commit()
-            _record_quarantine(entry_id, content, raw_path, redact_hits)
+            _record_quarantine(
+                entry_id,
+                _quarantine_payload(title or "", summary or "", content or "", new_title, new_summary),
+                raw_path,
+                redact_hits,
+            )
             print(f"  [REDACT] #{entry_id}: {', '.join(h[0] for h in redact_hits)}")
         cleaned.append((entry_id, etype, new_content, new_title, tags, new_summary, raw_path))
     db.close()
