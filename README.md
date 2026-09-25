@@ -102,6 +102,15 @@ Query
   └── Threshold 0.40 → top 5
 ```
 
+## Synthesis model
+
+The nexus synthesis endpoint (`/kb/synthesize/nexus-relevance`, called by AI Ingest)
+does not carry a model default in code: it reads `KB_SYNTHESIS_MODEL` from the deployed
+`/opt/kb/.env`, and fails closed with `KB synthesis model is not configured` when the
+variable is missing. The `kb ask` CLI reads the same variable (preferring its own
+`OPENROUTER_MODEL`), so the model is one operator setting for both call sites instead of
+a literal copied into two code bases.
+
 ## MCP tools
 
 `mcp_server.py` exposes the corpora to agents (stdio for local Claude Code, `:9100` SSE,

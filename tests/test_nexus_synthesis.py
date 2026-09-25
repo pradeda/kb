@@ -50,8 +50,8 @@ def retriever(*items: Candidate):
 class NexusSynthesisTests(unittest.TestCase):
     def test_synthesis_prompt_requires_concrete_nexus_target(self) -> None:
         with patch.dict("os.environ", {"OPENROUTER_API_KEY": "test"}), patch(
-            "kb_search_api.httpx.post"
-        ) as post:
+            "kb_search_api.SYNTHESIS_MODEL", "google/gemini-2.5-flash-lite"
+        ), patch("kb_search_api.httpx.post") as post:
             post.return_value.json.return_value = {
                 "choices": [{"message": {"content": json.dumps({"ok": True})}}]
             }
@@ -192,6 +192,38 @@ class NexusSynthesisTests(unittest.TestCase):
         self.assertFalse(response.connection_confirmed)
         self.assertEqual([item.entry_id for item in response.supporting_entries], [400])
         self.assertIn("Sol, Terra and Luna", response.supporting_entries[0].match_reason)
+
+    def test_model_comes_from_the_environment_not_a_code_default(self) -> None:
+        """The deployed env file owns the model; the service invents nothing."""
+        with patch.dict("os.environ", {"OPENROUTER_API_KEY": "test"}), patch(
+            "kb_search_api.SYNTHESIS_MODEL", ""
+        ), patch("kb_search_api.httpx.post") as post:
+            with self.assertRaises(RuntimeError) as raised:
+                _call_synthesis_model({"item": {}, "kb_entries": []})
+        self.assertIn("KB_SYNTHESIS_MODEL", str(raised.exception))
+        post.assert_not_called()
+
+    def test_configured_model_reaches_the_request(self) -> None:
+        with patch.dict("os.environ", {"OPENROUTER_API_KEY": "test"}), patch(
+            "kb_search_api.SYNTHESIS_MODEL", "vendor/model-from-env"
+        ), patch("kb_search_api.httpx.post") as post:
+            post.return_value.json.return_value = {
+                "choices": [{"message": {"content": json.dumps({"ok": True})}}]
+            }
+            _call_synthesis_model({"item": {}, "kb_entries": []})
+        self.assertEqual(post.call_args.kwargs["json"]["model"], "vendor/model-from-env")
+
+    def test_missing_model_fails_the_endpoint_closed(self) -> None:
+        with retriever(candidate(400, 0.91)), patch(
+            "kb_search_api.SYNTHESIS_MODEL", ""
+        ), patch("kb_search_api.httpx.post") as post, patch.dict(
+            "os.environ", {"KB_SYNTHESIS_TOKEN": "test", "OPENROUTER_API_KEY": "test"}
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                kb_synthesize_nexus_relevance(request(), x_kb_synthesis_token="test")
+        self.assertEqual(raised.exception.status_code, 502)
+        self.assertIn("KB_SYNTHESIS_MODEL", str(raised.exception.detail))
+        post.assert_not_called()
 
     def test_unwired_retrieval_lane_fails_closed(self) -> None:
         """No retriever means 503, never an empty "no related knowledge" answer."""

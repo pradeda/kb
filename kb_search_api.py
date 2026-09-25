@@ -25,7 +25,12 @@ EMBED_SOCKET = "/run/kb-embed/embed.sock"
 # where this model puts it at 1/51. Costs ~2x (121 vs 64 ms/pair on this CPU);
 # bge-reranker-v2-m3 scores as well but needs 1556 ms/pair here, which is unusable.
 RERANK_MODEL = os.getenv("KB_RERANK_MODEL", "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1")
-SYNTHESIS_MODEL = os.getenv("KB_SYNTHESIS_MODEL", "google/gemini-2.5-flash-lite")
+# One knob for both synthesis call sites: this endpoint and the `kb ask` CLI read
+# the same KB_SYNTHESIS_MODEL (the CLI prefers its own OPENROUTER_MODEL, then this).
+# No literal default here on purpose - the deployed /opt/kb/.env owns the value, so a
+# model change is one edit, not a code change in two places. Unset means the endpoint
+# fails closed instead of inventing a model the operator did not choose.
+SYNTHESIS_MODEL = os.getenv("KB_SYNTHESIS_MODEL", "").strip()
 SYNTHESIS_URL = os.getenv(
     "KB_SYNTHESIS_URL", "https://openrouter.ai/api/v1/chat/completions"
 )
@@ -232,6 +237,10 @@ def _call_synthesis_model(context: dict) -> dict:
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         raise RuntimeError("OPENROUTER_API_KEY is not configured")
+    if not SYNTHESIS_MODEL:
+        raise RuntimeError(
+            "KB synthesis model is not configured (set KB_SYNTHESIS_MODEL in /opt/kb/.env)"
+        )
     system = (
         "You classify two independent questions: (1) whether supplied KB entries contain "
         "knowledge directly related to the supplied item's subject, and (2) whether they establish an "
