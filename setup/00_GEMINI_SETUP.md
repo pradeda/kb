@@ -8,7 +8,7 @@ IP: nexus, /home/turok). Korisnik šalje URL ili tekst via Telegram, sistem komp
 ## Korak 1 — Direktorijumska struktura (nexus)
 
 ```bash
-mkdir -p /opt/kb/{raw/urls,raw/notes,wiki/{concepts,sources,queries},prompts}
+mkdir -p /opt/kb/{raw/urls,raw/notes,wiki/{concepts,sources,queries}}
 chown -R turok:turok /opt/kb
 ```
 
@@ -53,10 +53,9 @@ chmod 600 /opt/kb/.env
 
 ## Korak 5 — Compiler prompt
 
-Fajl: `04_compiler.md`
-```bash
-cp 04_compiler.md /opt/kb/prompts/compiler.md
-```
+Uklonjeno: generator wiki-ja i njegov prompt više ne postoje u produkciji (folder
+sa promptom je obrisan 2026-09-25). Korak preskoči; istorijski prompt je ostao samo
+kao `04_compiler.md` u ovom folderu.
 
 ---
 

@@ -12,7 +12,9 @@ KB          = Path("/opt/kb")
 DB          = KB / "kb.db"
 WIKI        = KB / "wiki"
 RAW         = KB / "raw"
-PROMPT_FILE = KB / "prompts" / "compiler.md"
+# Retired setup copy: production compile.py no longer generates a wiki and reads no
+# prompt. The prompt this copy reads ships next to it in this folder.
+PROMPT_FILE = Path(__file__).resolve().with_name("04_compiler.md")
 ENV_FILE    = KB / ".env"
 
 MODEL       = "google/gemini-2.0-flash-lite-001"
@@ -160,7 +162,7 @@ def main():
         mark_compiled(all_compiled_ids)
         print(f"\nKompajlirano: {len(all_compiled_ids)} unosa.")
     else:
-        print("\nNijedan unos nije kompajliran — proveri compiler.md prompt.")
+        print("\nNijedan unos nije kompajliran — proveri 04_compiler.md prompt.")
 
 if __name__ == "__main__":
     main()
