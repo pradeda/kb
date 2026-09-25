@@ -261,6 +261,228 @@ def add_entry(path: Path, entry_id: int, title: str, content: str, created_at: s
         connection.close()
 
 
+class FakeTokenizer:
+    def encode(self, text, **kwargs):
+        return list(range(len(text)))
+
+    def __call__(self, text, **kwargs):
+        return {"offset_mapping": [(i, i + 1) for i in range(len(text))]}
+
+    def num_special_tokens_to_add(self, pair=True):
+        return 3
+
+
+class FakeReranker:
+    tokenizer = FakeTokenizer()
+    max_seq_length = 512
+
+    def __init__(self, scores=None):
+        self.scores = scores
+
+    def predict(self, pairs):
+        return self.scores or [2.0] * len(pairs)
+
+
+CLIENTS = """clients:
+  full:
+    token_env: KB_V2_TOKEN_TEST_FULL
+    allowed_corpora: [homelab, ai]
+    allowed_scopes: [homelab, ai, both, auto]
+"""
+
+ROUTER = """router_version: corpus-router-v2-fts5-hybrid
+accept_thresholds:
+  homelab: 0.60
+  ai: 0.60
+reject_threshold: 0.40
+both_margin: 0.05
+dead_zone:
+  lower: 0.40
+  upper: 0.60
+candidate_k: 25
+max_distance:
+  homelab: 0.60
+  ai: 0.60
+ai_decay:
+  mode: disabled
+fts5:
+  enabled: true
+  semantic_k: 20
+  lexical_k: 5
+"""
+
+
+class SearchSurfaceTests(unittest.TestCase):
+    """The warning reaches the API response and changes nothing else."""
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.temp.name)
+        self.source = corpus_db(self.dir / "homelab.db")
+        self.ai_source = empty_corpus_db(self.dir / "ai.db")
+        clients = self.dir / "clients.yml"
+        clients.write_text(CLIENTS, encoding="utf-8")
+        os.chmod(clients, 0o600)
+        router = self.dir / "corpus-router.yml"
+        router.write_text(ROUTER, encoding="utf-8")
+        os.chmod(router, 0o600)
+        self.environment = patch.dict(
+            os.environ,
+            {
+                "KB_V2_CLIENTS_CONFIG": str(clients),
+                "KB_CORPUS_ROUTER_CONFIG": str(router),
+                "KB_V2_TOKEN_TEST_FULL": "f" * 64,
+                "KB_FTS5_DIR": str(self.dir),
+            },
+        )
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+        registry = patch.dict(
+            kb_v2.CORPUS_REGISTRY,
+            {
+                "homelab": {"db_path": str(self.source), "collection": "homelab_collection"},
+                "ai": {"db_path": str(self.ai_source), "collection": "ai_collection"},
+            },
+            clear=True,
+        )
+        registry.start()
+        self.addCleanup(registry.stop)
+        health = patch(
+            "kb_v2._corpus_health",
+            side_effect=lambda corpus, _ready: CorpusHealthV2(
+                ready=True, collection=f"{corpus}_collection"
+            ),
+        )
+        health.start()
+        self.addCleanup(health.stop)
+        # No lexical lane here: these tests are about the warning lane.
+        fts5 = patch("kb_v2.Fts5Index.build", return_value=None)
+        fts5.start()
+        self.addCleanup(fts5.stop)
+        throttle = patch.object(nn, "NEWER_NOTES_RECHECK_SECONDS", 0.0)
+        throttle.start()
+        self.addCleanup(throttle.stop)
+        audit = patch("kb_v2._audit")
+        self.audit = audit.start()
+        self.addCleanup(audit.stop)
+        self.headers = {"Authorization": "Bearer " + "f" * 64}
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def app(self, embed=None, scores=None, edges=True):
+        if edges:
+            return TestClient(create_v2_app(embed or Mock(return_value=[0.1]),
+                                            lambda: FakeReranker(scores)))
+        with patch("kb_v2.newer_notes_edges.NewerNotesIndex.build", return_value=None):
+            return TestClient(create_v2_app(embed or Mock(return_value=[0.1]),
+                                            lambda: FakeReranker(scores)))
+
+    def search(self, client, query="qwen load defaults"):
+        response = client.post(
+            "/kb/search",
+            headers=self.headers,
+            json={"query": query, "scope": "homelab", "top_k": 5, "allow_degraded": False},
+        )
+        self.assertEqual(response.status_code, 200)
+        return response.json()
+
+    def candidates(self, ids):
+        return [
+            {"entry_id": entry_id, "distance": 0.1 + index / 100}
+            for index, entry_id in enumerate(ids)
+        ]
+
+    def test_the_newer_note_is_reported_next_to_the_older_result(self):
+        with patch("kb_v2._query_collection", side_effect=lambda corpus, *_: self.candidates([963, 964])):
+            client = self.app(scores=[3.0, 2.0])
+            value = self.search(client)
+        results = {item["ref"]: item for item in value["corpora"]["homelab"]["results"]}
+        self.assertEqual(
+            results["homelab:963"]["newer_notes"],
+            [{
+                "ref": "homelab:992",
+                "title": "Forrix Qwen per-model load defaults (updates homelab:963)",
+                "relation": "updates",
+            }],
+        )
+        self.assertEqual(results["homelab:964"]["newer_notes"], [])
+        self.assertEqual(self.audit.call_args.kwargs["newer_notes_shown"], 1)
+
+    def test_no_warning_when_the_newer_note_is_itself_in_the_results(self):
+        with patch("kb_v2._query_collection", side_effect=lambda corpus, *_: self.candidates([963, 992])):
+            client = self.app(scores=[3.0, 2.5])
+            value = self.search(client)
+        for item in value["corpora"]["homelab"]["results"]:
+            self.assertEqual(item["newer_notes"], [], item["ref"])
+        self.assertEqual(self.audit.call_args.kwargs["newer_notes_shown"], 0)
+
+    def test_ranking_and_scores_are_identical_with_and_without_the_warning_lane(self):
+        def strip(value):
+            return [
+                (item["ref"], item["distance"], item["relevance"], item["final_score"])
+                for item in value["ranked"]
+            ]
+
+        with patch("kb_v2._query_collection", side_effect=lambda corpus, *_: self.candidates([963, 964])):
+            with_edges = self.search(self.app(scores=[3.0, 2.0]))
+            without_edges = self.search(self.app(scores=[3.0, 2.0], edges=False))
+        self.assertEqual(strip(with_edges), strip(without_edges))
+        self.assertEqual(with_edges["total_count"], without_edges["total_count"])
+        self.assertEqual(
+            [item["ref"] for item in with_edges["corpora"]["homelab"]["results"]],
+            [item["ref"] for item in without_edges["corpora"]["homelab"]["results"]],
+        )
+        self.assertEqual(
+            [(item["ref"], item["final_score"]) for item in with_edges["corpora"]["homelab"]["results"]],
+            [(item["ref"], item["final_score"]) for item in without_edges["corpora"]["homelab"]["results"]],
+        )
+        # The warning is the only difference.
+        self.assertTrue(
+            any(item["newer_notes"] for item in with_edges["corpora"]["homelab"]["results"])
+        )
+        self.assertFalse(
+            any(item["newer_notes"] for item in without_edges["corpora"]["homelab"]["results"])
+        )
+
+    def test_the_field_defaults_to_an_empty_list(self):
+        with patch("kb_v2._query_collection", side_effect=lambda corpus, *_: self.candidates([964])):
+            value = self.search(self.app(edges=False))
+        self.assertEqual(value["corpora"]["homelab"]["results"][0]["newer_notes"], [])
+
+    def test_a_note_added_after_startup_warns_without_a_restart(self):
+        with patch("kb_v2._query_collection", side_effect=lambda corpus, *_: self.candidates([963])):
+            client = self.app(scores=[3.0])
+            before = self.search(client)
+            self.assertEqual(
+                [note["ref"] for note in before["corpora"]["homelab"]["results"][0]["newer_notes"]],
+                ["homelab:992"],
+            )
+
+            add_entry(
+                self.source, 993, "Forrix Qwen defaults revisited (updates homelab:963)",
+                "Follow-up on the load defaults.", "2026-09-25T09:00:00",
+            )
+            after = self.search(client)
+        self.assertEqual(
+            [note["ref"] for note in after["corpora"]["homelab"]["results"][0]["newer_notes"]],
+            ["homelab:993", "homelab:992"],
+        )
+        self.assertEqual(self.audit.call_args.kwargs["newer_notes_shown"], 2)
+
+    def test_a_failing_edge_lane_is_reported_and_costs_no_results(self):
+        with patch("kb_v2.newer_notes_edges.NewerNotesIndex.build",
+                   side_effect=RuntimeError("boom")):
+            with patch("kb_v2._query_collection", side_effect=lambda corpus, *_: self.candidates([963])):
+                client = TestClient(create_v2_app(Mock(return_value=[0.1]),
+                                                  lambda: FakeReranker([3.0])))
+                value = self.search(client)
+        self.assertEqual([item["ref"] for item in value["ranked"]], ["homelab:963"])
+        self.assertEqual(value["ranked"][0]["newer_notes"], [])
+        self.assertEqual(self.audit.call_args.kwargs["newer_notes_shown"], 0)
+        self.assertIn("RuntimeError", self.audit.call_args.kwargs["newer_notes_degraded"])
+
+
 class IndexTests(unittest.TestCase):
     """Refresh follows the FTS5 mechanism: signature, throttle, keep-on-failure."""
 

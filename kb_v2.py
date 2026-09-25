@@ -28,6 +28,7 @@ from typing import Callable, Literal, Optional
 from urllib.parse import urlparse
 
 import corpora as corpus_identity  # single corpus-identity definition
+import newer_notes as newer_notes_edges  # "newer note changes this" edges
 
 import httpx
 import yaml
@@ -402,6 +403,19 @@ class SearchRequestV2(StrictModel):
         return data
 
 
+class NewerNoteV2(StrictModel):
+    """A later note that says it changes this one (partial change, not supersede).
+
+    `relation` is the canonical verb the newer note used: updates, corrects,
+    extends, supersedes, replaces, continues. Kept as a free string, not a Literal,
+    so adding a verb to the detector cannot turn a search into a 500.
+    """
+
+    ref: str = Field(pattern=r"^(homelab|ai):[1-9][0-9]*$")
+    title: str
+    relation: str = Field(min_length=1, max_length=32, pattern=r"^[a-z]+$")
+
+
 class SearchResultV2(StrictModel):
     corpus: CorpusName
     entry_id: int
@@ -414,6 +428,12 @@ class SearchResultV2(StrictModel):
     distance: float
     relevance: float
     final_score: float
+    # Additive and advisory: newer notes that explicitly change this one. Empty when
+    # there are none, when the newer note is already among the returned results, or
+    # when the edge index is unavailable. Nothing is reordered, dropped or demoted.
+    newer_notes: list[NewerNoteV2] = Field(
+        default_factory=list, max_length=newer_notes_edges.NEWER_NOTES_LIMIT
+    )
 
 
 class CorpusResultsV2(StrictModel):
@@ -1268,7 +1288,9 @@ def _public_url(source: Optional[str]) -> Optional[str]:
     return None
 
 
-def _result(candidate: Candidate) -> SearchResultV2:
+def _result(
+    candidate: Candidate, newer_notes: Optional[list[dict]] = None
+) -> SearchResultV2:
     public_source_url = _public_url(candidate.source)
     return SearchResultV2(
         corpus=candidate.corpus,
@@ -1282,6 +1304,7 @@ def _result(candidate: Candidate) -> SearchResultV2:
         distance=candidate.distance,
         relevance=candidate.relevance,
         final_score=candidate.final_score,
+        newer_notes=[NewerNoteV2(**note) for note in newer_notes or ()],
     )
 
 
@@ -1447,6 +1470,23 @@ def create_v2_app(
             except Exception as exc:
                 fts5_errors[corpus_name] = f"{type(exc).__name__}: {exc}"
                 print(f"[fts5] WARNING: {corpus_name}: {exc}", flush=True)
+
+    # Advisory lane: edges are read from the corpus databases and refreshed with the
+    # same signature/throttle mechanism as the FTS5 index. A build failure costs the
+    # warnings, never the search, so it is logged and reported, not raised.
+    newer_notes_index: Optional[newer_notes_edges.NewerNotesIndex] = None
+    newer_notes_build_error: Optional[str] = None
+    try:
+        newer_notes_index = newer_notes_edges.NewerNotesIndex.build(
+            {
+                corpus_name: profile["db_path"]
+                for corpus_name, profile in CORPUS_REGISTRY.items()
+            },
+            _fts5_source_signature,
+        )
+    except Exception as exc:
+        newer_notes_build_error = f"{type(exc).__name__}: {exc}"
+        print(f"[newer-notes] WARNING: {newer_notes_build_error}", flush=True)
 
     def authorize_snapshot(
         credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
@@ -1616,12 +1656,45 @@ def create_v2_app(
             _apply_decay(candidate, router_config)
             by_corpus[candidate.corpus].append(candidate)
         corpora = _empty_corpora()
+        # Ranking first, warnings second: the order and the scores are the ones the
+        # reranker produced, and a warning never moves a result (it is attached after
+        # the top-k cut).
+        ranked_by_corpus = {
+            corpus: sorted(by_corpus[corpus], key=lambda item: -item.final_score)[:request.top_k]
+            for corpus in searchable
+        }
+        # A warning is pointless when the reader can already see the newer note in this
+        # response, so a newer note that is itself among the returned results is not
+        # repeated next to the older one.
+        returned_refs = {
+            corpus: {f"{corpus}:{item.entry_id}" for item in ranked}
+            for corpus, ranked in ranked_by_corpus.items()
+        }
+        newer_notes_status: dict[str, str] = {}
+        if newer_notes_build_error is not None:
+            newer_notes_status["newer_notes_degraded"] = newer_notes_build_error
+        if newer_notes_index is not None:
+            newer_notes_index.refresh(newer_notes_status)
+        newer_notes_shown = 0
         # Kept alongside the per-corpus grouping to build `ranked` below: the same
         # candidates, carrying the score the grouping throws away.
         scored: list[tuple[float, SearchResultV2]] = []
         for corpus in searchable:
-            ranked = sorted(by_corpus[corpus], key=lambda item: -item.final_score)[:request.top_k]
-            results = [_result(item) for item in ranked]
+            ranked = ranked_by_corpus[corpus]
+            results: list[SearchResultV2] = []
+            for item in ranked:
+                notes = (
+                    newer_notes_index.for_ref(corpus, item.entry_id)
+                    if newer_notes_index is not None
+                    else []
+                )
+                notes = [
+                    note
+                    for note in notes
+                    if note["ref"] not in returned_refs.get(note["ref"].split(":", 1)[0], set())
+                ]
+                newer_notes_shown += len(notes)
+                results.append(_result(item, notes))
             scored.extend(zip((item.final_score for item in ranked), results))
             corpora[corpus] = CorpusResultsV2(
                 searched=True,
@@ -1679,6 +1752,12 @@ def create_v2_app(
                 for corpus, value in sorted(fts5_status.items())
                 if value.get("degraded")
             },
+            newer_notes_shown=newer_notes_shown,
+            **(
+                {"newer_notes_degraded": newer_notes_status["newer_notes_degraded"]}
+                if newer_notes_status.get("newer_notes_degraded")
+                else {}
+            ),
             elapsed_ms=round((time.perf_counter() - started) * 1000, 1),
             **(
                 {

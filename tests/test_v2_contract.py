@@ -137,6 +137,11 @@ fts5:
         # braces in case the stub is ever removed.
         self.fts5 = patch("kb_v2.Fts5Index.build", return_value=None)
         self.fts5.start()
+        # The newer-note edges are covered by tests/test_newer_notes.py; this suite is
+        # about routing/union/rerank semantics, so it must not read the live corpus
+        # databases (hermetic and fast).
+        self.newer_notes = patch("kb_v2.newer_notes_edges.NewerNotesIndex.build", return_value=None)
+        self.newer_notes.start()
         self.client = TestClient(create_v2_app(self.embed, lambda: self.reranker))
         self.headers = {"Authorization": "Bearer " + "f" * 64}
         self.health = patch(
@@ -148,6 +153,7 @@ fts5:
         self.health.start()
 
     def tearDown(self) -> None:
+        self.newer_notes.stop()
         self.fts5.stop()
         self.health.stop()
         self.environment.stop()
