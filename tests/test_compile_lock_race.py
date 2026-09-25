@@ -22,6 +22,7 @@ paths, so a bug here cannot reach /opt/kb/kb.db or kb_collection.
 
 Run from /opt/kb:  /opt/kb/venv-embed/bin/python /opt/kb/tests/test_compile_lock_race.py
 """
+import atexit
 import contextlib
 import errno
 import fcntl
@@ -30,6 +31,7 @@ import io
 import json
 import os
 import pathlib
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -54,6 +56,9 @@ else:
     raise RuntimeError(f"compile.py not found next to or above {_HERE}")
 
 _TMPROOT = pathlib.Path(tempfile.mkdtemp(prefix="kb-lock-tests-"))
+# One scratch tree per invocation used to accumulate in /tmp forever: nothing removed
+# it, so /tmp filled with kb-lock-tests-* directories (36 were present on 2026-09-25).
+atexit.register(shutil.rmtree, _TMPROOT, ignore_errors=True)
 
 # compile.py refuses a partial isolation override at import time, so the whole set
 # is provided. This is the sanctioned isolation path shared with the Go entry-point
@@ -484,6 +489,32 @@ class InterProcessLockTests(unittest.TestCase):
         fd = kbcompile.acquire_compile_lock(self.lock)
         self.assertIsNotNone(fd)
         kbcompile.release_compile_lock()
+
+
+class TempRootCleanupTests(unittest.TestCase):
+    """The suite's scratch tree must not outlive the run.
+
+    Each invocation of this module created /tmp/kb-lock-tests-* and removed nothing,
+    so the directories accumulated (36 were present on 2026-09-25) until the atexit
+    cleanup above was added. This asserts the cleanup runs in a real exit, not just
+    that the registration line exists.
+    """
+
+    def test_the_scratch_tree_is_gone_when_the_process_exits(self):
+        program = (
+            "import importlib.util, pathlib\n"
+            f"spec = importlib.util.spec_from_file_location('lockrace', {str(pathlib.Path(__file__).resolve())!r})\n"
+            "module = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(module)\n"
+            "print(module._TMPROOT)\n"
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", program], capture_output=True, text=True, timeout=300
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        scratch = pathlib.Path(completed.stdout.strip().splitlines()[-1])
+        self.assertIn("kb-lock-tests-", scratch.name)
+        self.assertFalse(scratch.exists(), f"{scratch} outlived the process that created it")
 
 
 if __name__ == "__main__":
