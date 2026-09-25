@@ -865,7 +865,10 @@ def _query_collection(
             json={
                 "query_embeddings": [embedding],
                 "n_results": n_results,
-                "include": ["distances", "documents", "metadatas"],
+                # Only ids and distances are consumed here; content and metadata come
+                # from SQLite in _fetch_candidates. Asking for documents+metadatas of
+                # the whole collection moved ~2.5 MB per search for nothing.
+                "include": ["distances"],
             },
             timeout=30,
         )
