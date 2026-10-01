@@ -179,6 +179,11 @@ def _format_corpus_payload(
     return "\n".join(lines).strip() or "No results."
 
 
+# All tools are declared unstructured: FastMCP otherwise auto-generates an output schema for the
+# tools returning `str` and sends each result twice — TextContent plus a structuredContent copy
+# ({"result": "<same text>"}), which OMP renders to the model in both forms. The text itself comes
+# from the same conversion path either way, so it is byte-identical. corpus_search returns a dict
+# and already had no schema; it stays explicit for consistency.
 @mcp.tool(
     description=(
         "Call before work that depends on homelab state, history or past decisions (once per "
@@ -194,7 +199,8 @@ def _format_corpus_payload(
         "kb_get(reference) for the full text of one brief. When supplying query_alt, translate the "
         "same intent faithfully into the other language without adding facts, and preserve technical "
         "literals exactly; query_alt_language is required with it."
-    )
+    ),
+    structured_output=False,
 )
 def semantic_search(
     query: str,
@@ -213,7 +219,8 @@ def semantic_search(
     description=(
         "Return the full text of one KB entry by its reference, e.g. 'ai:363' or 'homelab:1072' — "
         "use it to expand a brief from semantic_search. Read-only, no search or LLM call."
-    )
+    ),
+    structured_output=False,
 )
 def kb_get(reference: str) -> str:
     corpus, _, raw_id = reference.strip().partition(":")
@@ -247,7 +254,8 @@ def kb_get(reference: str) -> str:
         "Returns corpus-qualified references and grouped results. When supplying query_alt, translate "
         "the same intent faithfully into the other language without adding facts, and preserve technical "
         "literals exactly; query_alt_language is required with it."
-    )
+    ),
+    structured_output=False,
 )
 def corpus_search(
     query: str,
@@ -310,7 +318,8 @@ def corpus_search(
         "pass corpus='ai' to write to the AI research corpus instead. "
         "Use for documenting solutions, gotchas, config changes, or any knowledge worth preserving. "
         "Content is passed via stdin to support multi-line text safely."
-    )
+    ),
+    structured_output=False,
 )
 def add(
     content: str,
@@ -348,7 +357,8 @@ def add(
         "call fails with 'no such entry' or hits the homelab row with the same id. "
         "The old entry keeps its id and history, its title is prefixed [SUPERSEDED], and it "
         "is demoted in search. Refuses if entry_id does not exist in that corpus."
-    )
+    ),
+    structured_output=False,
 )
 def supersede(
     entry_id: int,
@@ -382,7 +392,8 @@ def supersede(
         "with warnings/broken_links/truncated means the answer is NOT the whole "
         "history (a stale index needs 'kb rebuild-supersede-index'; a broken link "
         "means a linked entry was retired)."
-    )
+    ),
+    structured_output=False,
 )
 def history(reference: str) -> str:
     try:
