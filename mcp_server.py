@@ -45,6 +45,10 @@ def _load_local_v2_token() -> None:
 # shown as a short brief and capped. scope="ai" or kb_get() returns the full text.
 MIXED_AI_HIT_LIMIT = 2
 AI_BRIEF_MAX_CHARS = 700
+# Homelab notes are printed whole up to this cap (p75 of them is ~3 KB, so most notes stay
+# whole and only the long tail is cut to a preview); kb_get() still returns the full text.
+HOMELAB_HIT_MAX_CHARS = 2000
+_WS_RE = re.compile(r"\s")
 _AI_SUMMARY_RE = re.compile(
     r"^## (?:Summary|Quick take|Executive summary)\s*\n+(.+?)(?=\n## |\Z)", re.S | re.M
 )
@@ -64,7 +68,24 @@ def _ai_brief(content: str) -> str:
     return f"Source: {source.group(1).strip()}\n{text}" if source else text
 
 
-def _render_hits(items: list, header: str, *, compact_ai: bool = False) -> list[str]:
+def _homelab_preview(content: str) -> str:
+    """Cut a long homelab note at a paragraph or whitespace boundary within the cap."""
+    head = content[:HOMELAB_HIT_MAX_CHARS]
+    # A paragraph break is a much better cut than a mid-sentence one, but only when it
+    # sits near the end of the preview (last ~40% of the cap).
+    cut = head.rfind("\n\n")
+    if cut < HOMELAB_HIT_MAX_CHARS * 0.6:
+        cut = -1
+        for match in _WS_RE.finditer(head):
+            cut = match.start()
+    if cut < 0:
+        return head + " …"
+    return head[:cut] + " …"
+
+
+def _render_hits(
+    items: list, header: str, *, compact_ai: bool = False, cap_homelab: bool = False
+) -> list[str]:
     lines = [header]
     for item in items:
         lines.append(f"[{item.get('ref')}] {item.get('title')}")
@@ -75,6 +96,9 @@ def _render_hits(items: list, header: str, *, compact_ai: bool = False) -> list[
         if compact_ai and item.get("corpus") == "ai":
             lines.append(_ai_brief(content))
             lines.append(f"(brief — full text: kb_get('{item.get('ref')}'))")
+        elif cap_homelab and item.get("corpus") != "ai" and len(content) > HOMELAB_HIT_MAX_CHARS:
+            lines.append(_homelab_preview(content))
+            lines.append(f"(truncated — full text: kb_get('{item.get('ref')}'))")
         else:
             lines.append(content)
         for note in item.get("newer_notes") or []:
@@ -88,7 +112,9 @@ def _render_hits(items: list, header: str, *, compact_ai: bool = False) -> list[
     return lines
 
 
-def _format_corpus_payload(payload: dict, *, compact_ai: bool = False) -> str:
+def _format_corpus_payload(
+    payload: dict, *, compact_ai: bool = False, cap_homelab: bool = False
+) -> str:
     """Render the v2 response as one cross-corpus ranking, each hit naming its corpus.
 
     Prefers the merged `ranked` list: the reranker scores both corpora in a single
@@ -97,7 +123,9 @@ def _format_corpus_payload(payload: dict, *, compact_ai: bool = False) -> str:
     grouped shape when `ranked` is absent, so an older API stays readable.
 
     compact_ai keeps the ranking but shows at most MIXED_AI_HIT_LIMIT AI hits, each
-    as a brief; homelab hits are never shortened or dropped.
+    as a brief. cap_homelab shortens homelab hits longer than HOMELAB_HIT_MAX_CHARS to
+    a preview plus a kb_get(reference) pointer; hits at or below the cap are printed
+    unchanged. Neither flag reorders or drops homelab hits.
     """
     ranked = payload.get("ranked")
     if isinstance(ranked, list) and ranked:
@@ -118,7 +146,10 @@ def _format_corpus_payload(payload: dict, *, compact_ai: bool = False) -> str:
                 shown.append(item)
             ranked = shown
         lines = _render_hits(
-            ranked, f"=== {len(ranked)} result(s), best first ===", compact_ai=compact_ai
+            ranked,
+            f"=== {len(ranked)} result(s), best first ===",
+            compact_ai=compact_ai,
+            cap_homelab=cap_homelab,
         )
         if omitted_ai:
             lines.append(
@@ -138,18 +169,28 @@ def _format_corpus_payload(payload: dict, *, compact_ai: bool = False) -> str:
             lines.append(f"=== {corpus}: not searched ===")
             continue
         results = section.get("results") or []
-        lines.extend(_render_hits(results, f"=== {corpus}: {len(results)} result(s) ==="))
+        lines.extend(
+            _render_hits(
+                results,
+                f"=== {corpus}: {len(results)} result(s) ===",
+                cap_homelab=cap_homelab,
+            )
+        )
     return "\n".join(lines).strip() or "No results."
 
 
 @mcp.tool(
     description=(
-        "MUST be called before any research, implementation, debugging, or configuration task. "
-        "Searches the knowledge corpora — Homelab infrastructure and AI research — and returns "
-        "corpus-qualified entries in one ranking, without an internal LLM call. "
-        "scope='both' (default, for homelab tasks) returns homelab entries in full and at most "
-        f"{MIXED_AI_HIT_LIMIT} AI entries as short briefs; use scope='ai' for questions about AI "
-        "models, tools, papers or techniques (full AI entries), scope='homelab' to skip AI, and "
+        "Call before work that depends on homelab state, history or past decisions (once per "
+        "topic, not per message). Searches the knowledge corpora — Homelab infrastructure and AI "
+        "research — and returns corpus-qualified entries in one ranking, without an internal LLM "
+        "call. "
+        "scope='both' (default, for homelab tasks) returns homelab entries up to "
+        f"{HOMELAB_HIT_MAX_CHARS} chars — longer ones are shown as a truncated preview ending in a "
+        "kb_get(reference) pointer, so call kb_get before relying on details from such a hit — and "
+        f"at most {MIXED_AI_HIT_LIMIT} AI entries as short briefs; use scope='ai' for questions "
+        "about AI models, tools, papers or techniques (full AI entries), scope='homelab' to skip "
+        "AI, and "
         "kb_get(reference) for the full text of one brief. When supplying query_alt, translate the "
         "same intent faithfully into the other language without adding facts, and preserve technical "
         "literals exactly; query_alt_language is required with it."
@@ -164,6 +205,7 @@ def semantic_search(
     return _format_corpus_payload(
         corpus_search(query, scope=scope, query_alt=query_alt, query_alt_language=query_alt_language),
         compact_ai=scope == "both",
+        cap_homelab=True,
     )
 
 
