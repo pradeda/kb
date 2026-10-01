@@ -731,6 +731,109 @@ fts5:
         root = kb_search_api.create_root_app(fts5_dir=self.temp.name).openapi()
         self.assertNotIn("/v2/kb/search", root["paths"])
 
+    #: Every named schema of the v2 surface. The frozen contract is what a strict client
+    #: validates real responses against, so a response field that exists only in the
+    #: generated document is a broken contract. Comparing the intersection of the two
+    #: documents hides exactly that, hence the explicit membership check below.
+    FROZEN_SCHEMA_NAMES = (
+        "SearchRequestV2",
+        "SearchResultV2",
+        "CorpusResultsV2",
+        "SearchResponseV2",
+        "HealthResponseV2",
+        "CorpusHealthV2",
+        "NewerNoteV2",
+    )
+
+    def test_frozen_contract_covers_every_generated_v2_schema(self) -> None:
+        generated = self.client.get("/openapi.json").json()["components"]["schemas"]
+        frozen = json.loads((CONTRACTS / "v2.openapi.json").read_text(encoding="utf-8"))[
+            "components"
+        ]["schemas"]
+
+        # A schema missing from either document is a gap, not an empty set.
+        for name in self.FROZEN_SCHEMA_NAMES:
+            with self.subTest(schema=name):
+                self.assertIn(name, generated)
+                self.assertIn(name, frozen)
+                self.assertEqual(
+                    set(generated[name]["properties"]), set(frozen[name]["properties"])
+                )
+
+        # SearchRequestV2 is the request contract: a mismatch in either direction would
+        # mean a request the service accepts is undocumented, or vice versa.
+        self.assertEqual(
+            set(generated["SearchRequestV2"]["required"]),
+            set(frozen["SearchRequestV2"]["required"]),
+        )
+
+        # Response schemas: pydantic serializes every field, including one carrying a
+        # default, so the frozen contract is allowed to be stricter than the generated
+        # one -- it already pins CorpusHealthV2.reason and
+        # HealthResponseV2.auto_routing_enabled, which pydantic never marks required.
+        # The generated requirements must therefore be a subset of the frozen ones (an
+        # extra generated requirement would reject a valid response), and the frozen
+        # ones must stay addressable, i.e. defined properties.
+        #
+        # `ranked` and `newer_notes` are deliberately NOT part of frozen `required`:
+        # both are default_factory lists, so a response without them is still valid and
+        # the service fills them in. Pinning them required would also mean relaxing the
+        # exact `SearchResultV2.required` equality asserted by
+        # test_separate_openapi_and_legacy_root_surface, which must keep holding.
+        for name in (
+            "SearchResultV2",
+            "CorpusResultsV2",
+            "SearchResponseV2",
+            "HealthResponseV2",
+            "CorpusHealthV2",
+            "NewerNoteV2",
+        ):
+            with self.subTest(schema=name, part="required"):
+                generated_required = set(generated[name]["required"])
+                frozen_required = set(frozen[name]["required"])
+                self.assertTrue(
+                    generated_required <= frozen_required,
+                    f"{name}: generated requires fields absent from the frozen contract: "
+                    f"{sorted(generated_required - frozen_required)}",
+                )
+                self.assertTrue(
+                    frozen_required <= set(frozen[name]["properties"]),
+                    f"{name}: frozen requires an undefined property: "
+                    f"{sorted(frozen_required - set(frozen[name]['properties']))}",
+                )
+
+        # CorporaV2 is a separate component when generated but an inline object inside
+        # SearchResponseV2 in the frozen document. The shapes must still agree; the
+        # frozen JSON is not restructured to make the comparison convenient.
+        inline_corpora = frozen["SearchResponseV2"]["properties"]["corpora"]
+        self.assertEqual(
+            set(generated["CorporaV2"]["properties"]), set(inline_corpora["properties"])
+        )
+        self.assertEqual(
+            set(generated["CorporaV2"]["required"]), set(inline_corpora["required"])
+        )
+
+        # The two fields that drifted: the merged cross-corpus ranking on the response
+        # and the advisory newer-note warnings on each result.
+        ranked = frozen["SearchResponseV2"]["properties"]["ranked"]
+        self.assertEqual(ranked["type"], "array")
+        self.assertEqual(ranked["items"], {"$ref": "#/components/schemas/SearchResultV2"})
+        self.assertEqual(ranked["maxItems"], 10)
+
+        newer_notes = frozen["SearchResultV2"]["properties"]["newer_notes"]
+        self.assertEqual(newer_notes["type"], "array")
+        self.assertEqual(newer_notes["items"], {"$ref": "#/components/schemas/NewerNoteV2"})
+        self.assertEqual(newer_notes["maxItems"], 3)
+
+        note = frozen["NewerNoteV2"]
+        self.assertIs(note["additionalProperties"], False)
+        self.assertEqual(set(note["required"]), {"ref", "title", "relation"})
+        self.assertEqual(note["properties"]["ref"]["pattern"], "^(homelab|ai):[1-9][0-9]*$")
+        relation = note["properties"]["relation"]
+        self.assertEqual(relation["minLength"], 1)
+        self.assertEqual(relation["maxLength"], 32)
+        self.assertEqual(relation["pattern"], "^[a-z]+$")
+
 
 class QueryLanguageTests(unittest.TestCase):
     """Audit belezi jezik upita, nikad sam tekst upita."""

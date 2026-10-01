@@ -166,6 +166,30 @@
           }
         }
       },
+      "NewerNoteV2": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ref",
+          "title",
+          "relation"
+        ],
+        "properties": {
+          "ref": {
+            "type": "string",
+            "pattern": "^(homelab|ai):[1-9][0-9]*$"
+          },
+          "title": {
+            "type": "string"
+          },
+          "relation": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32,
+            "pattern": "^[a-z]+$"
+          }
+        }
+      },
       "SearchResultV2": {
         "type": "object",
         "additionalProperties": false,
@@ -227,6 +251,13 @@
           },
           "final_score": {
             "type": "number"
+          },
+          "newer_notes": {
+            "type": "array",
+            "maxItems": 3,
+            "items": {
+              "$ref": "#/components/schemas/NewerNoteV2"
+            }
           }
         }
       },
@@ -400,6 +431,13 @@
               "ai": {
                 "$ref": "#/components/schemas/CorpusResultsV2"
               }
+            }
+          },
+          "ranked": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "$ref": "#/components/schemas/SearchResultV2"
             }
           }
         }
