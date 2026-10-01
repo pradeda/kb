@@ -24,6 +24,21 @@ ISOLATION_VARS = (
     "KB_AI_DB", "KB_AI_RAW", "KB_AI_QUARANTINE", "KB_AI_ENV",
 )
 
+# Which profile field each isolation variable overrides, as
+# (corpus, profile key, env var). Keeping the binding in one table means a var can
+# neither be declared without a destination nor land in another corpus' field, and
+# tests/test_isolation_contract.py binds this table to the Go list.
+ISOLATION_TARGETS = (
+    ("homelab", "db", "KB_HOMELAB_DB"),
+    ("homelab", "raw", "KB_HOMELAB_RAW"),
+    ("homelab", "quarantine_dir", "KB_HOMELAB_QUARANTINE"),
+    ("homelab", "env", "KB_HOMELAB_ENV"),
+    ("ai", "db", "KB_AI_DB"),
+    ("ai", "raw", "KB_AI_RAW"),
+    ("ai", "quarantine_dir", "KB_AI_QUARANTINE"),
+    ("ai", "env", "KB_AI_ENV"),
+)
+
 
 def _apply_isolation_env():
     """All-or-nothing storage override, mirrored in corpus.go (isolationOverride).
@@ -44,14 +59,8 @@ def _apply_isolation_env():
         raise SystemExit(
             "incomplete KB isolation env: set all of "
             f"{list(ISOLATION_VARS)} (missing {missing}); refusing production fallback")
-    CORPUS_PROFILES["homelab"]["db"] = present["KB_HOMELAB_DB"]
-    CORPUS_PROFILES["homelab"]["raw"] = present["KB_HOMELAB_RAW"]
-    CORPUS_PROFILES["homelab"]["quarantine_dir"] = present["KB_HOMELAB_QUARANTINE"]
-    CORPUS_PROFILES["homelab"]["env"] = present["KB_HOMELAB_ENV"]
-    CORPUS_PROFILES["ai"]["db"] = present["KB_AI_DB"]
-    CORPUS_PROFILES["ai"]["raw"] = present["KB_AI_RAW"]
-    CORPUS_PROFILES["ai"]["quarantine_dir"] = present["KB_AI_QUARANTINE"]
-    CORPUS_PROFILES["ai"]["env"] = present["KB_AI_ENV"]
+    for corpus, key, var in ISOLATION_TARGETS:
+        CORPUS_PROFILES[corpus][key] = present[var]
     # The audit log is the sibling of its directory in production
     # (…/quarantine + …/quarantine.log), so deriving it keeps the whole quarantine
     # path isolated once the directory is named.
@@ -61,7 +70,7 @@ def _apply_isolation_env():
         )
 
 
-KB = DB = WIKI = RAW = ENV_FILE = None
+DB = RAW = ENV_FILE = None
 SECRET_PATTERNS_FILE = QUARANTINE_DIR = QUARANTINE_LOG = None
 CHROMA_COLLECTION = None
 ACTIVE_CORPUS = None
@@ -73,7 +82,7 @@ EMBEDDING_DIMENSION = 768
 COLLECTION_SCHEMA_VERSION = 1
 
 def configure_corpus(name):
-    global ACTIVE_CORPUS, KB, DB, WIKI, RAW, ENV_FILE
+    global ACTIVE_CORPUS, DB, RAW, ENV_FILE
     global CHROMA_COLLECTION, SECRET_PATTERNS_FILE, QUARANTINE_DIR, QUARANTINE_LOG
     global _secret_rules
     try:
@@ -81,12 +90,10 @@ def configure_corpus(name):
     except KeyError as exc:
         raise ValueError(f"unknown corpus {name!r}") from exc
     ACTIVE_CORPUS = name
-    KB = Path(profile["root"])
     DB = Path(profile["db"])
     RAW = Path(profile["raw"])
     ENV_FILE = Path(profile["env"])
     CHROMA_COLLECTION = profile["collection"]
-    WIKI = Path(profile["wiki_index"]).parent if profile["wiki_index"] else None
     SECRET_PATTERNS_FILE = Path(profile["secret_patterns"])
     QUARANTINE_DIR = Path(profile["quarantine_dir"])
     QUARANTINE_LOG = Path(profile["quarantine_log"])
@@ -178,6 +185,19 @@ def _is_lock_contention(exc):
     return exc.errno in (errno.EAGAIN, errno.EWOULDBLOCK)
 
 
+def _open_lock(target):
+    """Open a lock file for flock, tolerating one created by another user.
+
+    A lock file owned by the other account (the wrapper runs as root, the timer
+    as turok) cannot be opened for writing, but flock itself needs no write
+    access — read-only is enough to take the lock.
+    """
+    try:
+        return os.open(str(target), os.O_CREAT | os.O_RDWR, 0o666)
+    except PermissionError:
+        return os.open(str(target), os.O_RDONLY)
+
+
 def acquire_compile_lock(path=None):
     """Take the blocking per-corpus lock and keep it for this process.
 
@@ -190,11 +210,7 @@ def acquire_compile_lock(path=None):
         # lock (different file description), so treat it as already held.
         return _compile_lock_fd
     target = Path(path) if path else compile_lock_path()
-    try:
-        fd = os.open(str(target), os.O_CREAT | os.O_RDWR, 0o666)
-    except PermissionError:
-        # Lock file created by another user; flock needs no write access.
-        fd = os.open(str(target), os.O_RDONLY)
+    fd = _open_lock(target)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError as exc:
@@ -251,11 +267,7 @@ def acquire_shared_health_lock(path=None, timeout=None):
     budget = HEALTH_LOCK_TIMEOUT if timeout is None else timeout
     deadline = time.monotonic() + budget
     while True:
-        try:
-            fd = os.open(str(target), os.O_CREAT | os.O_RDWR, 0o666)
-        except PermissionError:
-            # Lock file created by another user; flock needs no write access.
-            fd = os.open(str(target), os.O_RDONLY)
+        fd = _open_lock(target)
         try:
             fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
         except OSError as exc:
@@ -760,8 +772,10 @@ def recover_raw_from_db():
             skipped += 1
             continue
 
-        if not raw_file or not use_existing:
-            raw_file = RAW / subdir / f"{date_str}-{slug}.md"
+        # use_existing already continued above, so reaching here always means there
+        # is no file to reuse: either the row has no raw_path or it no longer exists
+        # (or could not be stat-ed).
+        raw_file = RAW / subdir / f"{date_str}-{slug}.md"
         raw_file.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         raw_file.parent.chmod(0o700)
 
