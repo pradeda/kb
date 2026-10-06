@@ -35,3 +35,12 @@ clients:
     - homelab
     - ai
     - both
+  lethe-omar:
+    token_env: KB_V2_TOKEN_LETHE_OMAR
+    allowed_corpora:
+    - homelab
+    - ai
+    allowed_scopes:
+    - homelab
+    - ai
+    - both
