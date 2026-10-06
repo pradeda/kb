@@ -17,6 +17,7 @@ import re
 import shutil
 import sqlite3
 import stat
+import sys
 import tempfile
 import threading
 import time
@@ -1207,11 +1208,22 @@ def _reranker_passage(query: str, content: str, model) -> str:
     return windows[best][0]
 
 
+# Serializes every rerank pass through the single shared CrossEncoder. See
+# _rerank_batch for why the tokenizer forces this.
+_RERANK_LOCK = threading.Lock()
+
+
 def _rerank_batch(query: str, candidates: list[Candidate], model) -> None:
     if not candidates:
         return
-    pairs = [(query, _reranker_passage(query, item.content or item.summary or "", model)) for item in candidates]
-    raw_scores = list(model.predict(pairs))
+    # One shared CrossEncoder is one shared HF fast tokenizer, and that tokenizer is not
+    # reentrant: two threads tokenizing at once hit `RuntimeError: Already borrowed` in
+    # set_truncation_and_padding (measured offline: 10/200 batches at 8 threads, 0/20 at
+    # 1; the live 503s were this, thrown inside predict). Passage selection tokenizes too,
+    # so both run under the lock; the scoring arithmetic below does not touch the model.
+    with _RERANK_LOCK:
+        pairs = [(query, _reranker_passage(query, item.content or item.summary or "", model)) for item in candidates]
+        raw_scores = list(model.predict(pairs))
     if len(raw_scores) != len(candidates):
         raise RuntimeError("reranker score cardinality mismatch")
     relevance_scores = []
@@ -1626,6 +1638,14 @@ def create_v2_app(
         try:
             _rerank_batch(request.query, candidates, model)
         except Exception as exc:
+            # The reason used to be lost entirely (audit carried only `failure: rerank`),
+            # which made an intermittent 503 undiagnosable from the journal. Type and
+            # message only — the query text must never reach the log.
+            print(
+                f"[rerank] {type(exc).__name__}: {str(exc)[:500]}",
+                file=sys.stderr,
+                flush=True,
+            )
             _audit("search", client=client.name, scope=request.scope, status=503, failure="rerank")
             raise HTTPException(status_code=503, detail={"reason": "reranker_unavailable"}) from exc
         if use_alt:
