@@ -204,6 +204,18 @@ class HomelabCapTests(unittest.TestCase):
         self.assertLess(pointer, warning)
         self.assertLess(warning, text.index("[ai:9]"))
 
+    def test_only_fact_changing_relations_get_the_read_first_suffix(self):
+        suffix = " — this result may be partly outdated; call kb_get('homelab:2') before relying on it"
+        for relation, expected in (("updates", True), ("corrects", True),
+                                   ("extends", False), ("continues", False)):
+            with self.subTest(relation=relation):
+                ranked = [hit("homelab", 1, newer_notes=[note("homelab:2", "A later note", relation)])]
+                text = self.render(ranked)
+                line = f"⚠ newer note {relation} this: homelab:2 — A later note"
+                self.assertIn(line + suffix if expected else line, text.splitlines())
+                if not expected:
+                    self.assertNotIn("partly outdated", text)
+
     def test_payload_is_not_mutated(self):
         ranked = [hit("homelab", 1, LONG_HOMELAB)] + [hit("ai", i, AI_CONTENT) for i in (2, 3, 4)]
         data = payload(ranked)

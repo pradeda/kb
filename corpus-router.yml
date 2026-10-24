@@ -2,7 +2,7 @@ router_version: corpus-router-v2-fts5-hybrid
 accept_thresholds:
   homelab: 0.6
   ai: 0.6
-reject_threshold: 0.4
+reject_threshold: 0.25
 both_margin: 0.05
 dead_zone:
   lower: 0.4

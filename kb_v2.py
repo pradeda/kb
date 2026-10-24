@@ -30,10 +30,12 @@ from urllib.parse import urlparse
 
 import corpora as corpus_identity  # single corpus-identity definition
 import newer_notes as newer_notes_edges  # "newer note changes this" edges
+import query_log
 
 import httpx
 import yaml
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import PlainTextResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import (
     AnyHttpUrl,
@@ -65,9 +67,11 @@ PRECALIBRATION_ROUTER_VERSION = "corpus-router-v2-fts5-hybrid"
 #     print(kb_v2._router_fingerprint(kb_v2._parse_router_config( \
 #       yaml.safe_load(open('/opt/kb/corpus-router.yml', encoding='utf-8')))))"
 # and paste the result here.
-APPROVED_ROUTER_FINGERPRINT = "63c2abb0bd4c28c833da4739fbccfff40d7289a531703550a1baf52dc2ebac8c"
+# 2026-10-22 v3a reject 0.25 (homelab:1454)
+APPROVED_ROUTER_FINGERPRINT = "73be358c1f4363f167c4d2aef750e033fb414cbe4a9fab12194fcb15843f79f3"
 HOMELAB_DECAY_HALF_LIFE = 540.0
 HOMELAB_DECAY_FLOOR = 0.30
+ALTERNATE_ONLY_NO_PRIMARY_MIN_RELEVANCE = 0.40  # v3a scale; measured in homelab:1456
 SUPERSEDE_DEMOTE = 0.1  # final_score multiplier for [SUPERSEDED] entries — demotes without
                         # excluding (inclusion is decided pre-final_score, so an explicit history
                         # search still surfaces the old entry, ranked at the bottom)
@@ -348,8 +352,10 @@ def _fts5_lookup(
     """
     try:
         return _fts5_query(fts5_path, query_text, FTS5_FETCH_LIMIT)
-    except sqlite3.Error as exc:
-        _fts5_record(corpus, f"lexical index unusable ({type(exc).__name__}: {exc})", status)
+    except sqlite3.Error:
+        # SQLite may echo a malformed MATCH expression, which is derived from the
+        # private query. Keep the existing degraded-status shape, with a fixed value.
+        _fts5_record(corpus, "lexical index unusable (database_error)", status)
         return []
 
 
@@ -1257,7 +1263,10 @@ def _admit_alternate_only_candidates(
             continue
         if candidate.alternate_rank is None or candidate.alternate_rank > 5:
             continue
-        if not primary_has_result and candidate.relevance < 0.94:
+        if (
+            not primary_has_result
+            and candidate.relevance < ALTERNATE_ONLY_NO_PRIMARY_MIN_RELEVANCE
+        ):
             continue
         admitted.append(candidate)
     return admitted
@@ -1461,7 +1470,9 @@ def create_v2_app(
     union_enabled: bool = False,
     alternate_only_rank_limit: Optional[int] = ALTERNATE_ONLY_RANK_LIMIT,
     fts5_dir: Optional[str] = None,
+    query_logger: Optional[query_log.QueryLogger] = None,
 ) -> FastAPI:
+    search_logger = query_logger if query_logger is not None else query_log.QueryLogger.from_environment()
     try:
         client_snapshot = _load_clients()
     except HTTPException:
@@ -1538,6 +1549,49 @@ def create_v2_app(
 
     @v2.post("/kb/search", response_model=SearchResponseV2)
     def search_v2(
+        request: SearchRequestV2,
+        client: AuthorizedClient = Depends(authorize_snapshot),
+    ):
+        started = time.perf_counter()
+        base = {
+            "client": client.name,
+            "scope": request.scope,
+            "query": request.query,
+            "query_alt": request.query_alt,
+            "query_alt_language": request.query_alt_language,
+            "elapsed_ms": 0.0,
+        }
+        try:
+            response = _search_v2_impl(request, client)
+        except HTTPException as exc:
+            reason = exc.detail.get("reason") if isinstance(exc.detail, dict) else None
+            category = {
+                "auto_routing_not_enabled": "conflict",
+                "router_config_unavailable": "unavailable",
+                "all_corpora_unavailable": "retrieval_unavailable",
+                "required_corpus_unavailable": "retrieval_unavailable",
+                "retrieval_unavailable": "retrieval_unavailable",
+                "reranker_unavailable": "reranker_unavailable",
+            }.get(reason, "forbidden" if exc.status_code == 403 else "http_error")
+            search_logger.record({**base, "status": exc.status_code, "category": category,
+                                  "elapsed_ms": (time.perf_counter() - started) * 1000})
+            raise
+        except Exception:
+            search_logger.record({**base, "status": 500, "category": "internal_error",
+                                  "elapsed_ms": (time.perf_counter() - started) * 1000})
+            # Never re-raise the original request exception: ASGI servers log its
+            # traceback (which may contain query-derived data) even with a generic
+            # response body. Keep the existing status/body without the exception chain.
+            return PlainTextResponse("Internal Server Error", status_code=500)
+        search_logger.record({
+            **base,
+            "selected_scope": response.selected_scope,
+            "ranked": [{"ref": item.ref, "final_score": item.final_score} for item in response.ranked],
+            "elapsed_ms": (time.perf_counter() - started) * 1000,
+        })
+        return response
+
+    def _search_v2_impl(
         request: SearchRequestV2,
         client: AuthorizedClient = Depends(authorize_snapshot),
     ):
@@ -1638,14 +1692,8 @@ def create_v2_app(
         try:
             _rerank_batch(request.query, candidates, model)
         except Exception as exc:
-            # The reason used to be lost entirely (audit carried only `failure: rerank`),
-            # which made an intermittent 503 undiagnosable from the journal. Type and
-            # message only — the query text must never reach the log.
-            print(
-                f"[rerank] {type(exc).__name__}: {str(exc)[:500]}",
-                file=sys.stderr,
-                flush=True,
-            )
+            # Exception text can include the private query or its prompt context.
+            print("[rerank] failure category=rerank", file=sys.stderr, flush=True)
             _audit("search", client=client.name, scope=request.scope, status=503, failure="rerank")
             raise HTTPException(status_code=503, detail={"reason": "reranker_unavailable"}) from exc
         if use_alt:

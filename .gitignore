@@ -43,3 +43,7 @@ ai-kb.db
 # the harness, test sets and fixtures under eval/ stay tracked)
 eval/report-*.json
 eval/rewrite-report-*.json
+
+# Private query logs and local model artifacts (never publish)
+logs/
+models/

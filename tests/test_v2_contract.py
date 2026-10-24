@@ -97,7 +97,7 @@ class V2ContractTests(unittest.TestCase):
 accept_thresholds:
   homelab: 0.60
   ai: 0.60
-reject_threshold: 0.40
+reject_threshold: 0.25
 both_margin: 0.05
 dead_zone:
   lower: 0.40
@@ -326,13 +326,35 @@ fts5:
         low = candidate("homelab", 1)
         low.from_primary = False
         low.alternate_rank = 1
-        low.relevance = 0.9399
+        low.relevance = 0.3999
         high = candidate("homelab", 2)
         high.from_primary = False
         high.alternate_rank = 5
-        high.relevance = 0.94
-        admitted = kb_v2._admit_alternate_only_candidates([low, high], 0.4)
+        high.relevance = 0.40
+        admitted = kb_v2._admit_alternate_only_candidates(
+            [low, high], 0.25
+        )
         self.assertEqual([item.entry_id for item in admitted], [2])
+
+    def test_alternate_admission_0_30_depends_on_primary_result(self) -> None:
+        alternate_only = candidate("homelab", 1)
+        alternate_only.from_primary = False
+        alternate_only.alternate_rank = 1
+        alternate_only.relevance = 0.30
+        self.assertEqual(
+            kb_v2._admit_alternate_only_candidates([alternate_only], 0.25), []
+        )
+
+        primary = candidate("homelab", 2)
+        primary.relevance = 0.25
+        alternate_with_primary = candidate("homelab", 3)
+        alternate_with_primary.from_primary = False
+        alternate_with_primary.alternate_rank = 1
+        alternate_with_primary.relevance = 0.30
+        admitted = kb_v2._admit_alternate_only_candidates(
+            [primary, alternate_with_primary], 0.25
+        )
+        self.assertEqual([item.entry_id for item in admitted], [2, 3])
 
     def test_pre_rerank_pruning_keeps_primary_provenance_and_top_five_alternate_only(self) -> None:
         primary = [{"entry_id": 1, "distance": 0.3}, {"entry_id": 2, "distance": 0.4}]

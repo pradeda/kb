@@ -633,7 +633,7 @@ def embed_entries(entries):
             continue
 
         try:
-            embeddings = [e.tolist() for e in model.passage_embed(texts)]
+            embeddings = [e.tolist() for e in model.passage_embed(texts, batch_size=1)]
             collection.upsert(
                 ids=ids,
                 embeddings=embeddings,

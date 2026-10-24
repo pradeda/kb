@@ -38,7 +38,8 @@ SYNTHESIS_MODEL = _synthesis_model_from(os.getenv("KB_SYNTHESIS_MODEL"))
 SYNTHESIS_URL = os.getenv(
     "KB_SYNTHESIS_URL", "https://openrouter.ai/api/v1/chat/completions"
 )
-SYNTHESIS_MIN_SCORE = 0.60
+# 2026-10-22 v3a calibration (homelab:1454); article gate unchanged
+SYNTHESIS_MIN_SCORE = 0.42
 SYNTHESIS_ARTICLE_MIN_SCORE = 0.50
 SYNTHESIS_MAX_RESULTS = 3
 SYNTHESIS_MAX_EXCERPT_CHARS = 2000

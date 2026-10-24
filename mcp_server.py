@@ -104,10 +104,17 @@ def _render_hits(
         for note in item.get("newer_notes") or []:
             if not isinstance(note, dict):
                 continue
-            lines.append(
+            line = (
                 f"⚠ newer note {note.get('relation')} this: {note.get('ref')} — "
                 f"{note.get('title')}"
             )
+            # Only these relations change facts of the old note; extends/continues just add.
+            if note.get("relation") in ("updates", "corrects"):
+                line += (
+                    " — this result may be partly outdated; "
+                    f"call kb_get('{note.get('ref')}') before relying on it"
+                )
+            lines.append(line)
         lines.append("")
     return lines
 
