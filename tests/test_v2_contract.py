@@ -857,6 +857,37 @@ fts5:
         self.assertEqual(relation["pattern"], "^[a-z]+$")
 
 
+    def test_frozen_newer_note_contract_accepts_preview_with_and_without(self) -> None:
+        """preview is optional in the frozen contract: absent on the wire when unset."""
+        frozen = json.loads((CONTRACTS / "v2.openapi.json").read_text(encoding="utf-8"))[
+            "components"
+        ]["schemas"]["NewerNoteV2"]
+        self.assertNotIn("preview", frozen["required"])
+        self.assertEqual(
+            frozen["properties"]["preview"], {"type": "string", "maxLength": 400}
+        )
+
+        without = kb_v2.NewerNoteV2(ref="homelab:963", title="Route", relation="updates")
+        with_preview = kb_v2.NewerNoteV2(
+            ref="homelab:963", title="Route", relation="updates", preview="What changed"
+        )
+        self.assertEqual(
+            without.model_dump(mode="json"),
+            {"ref": "homelab:963", "title": "Route", "relation": "updates"},
+        )
+        self.assertEqual(
+            with_preview.model_dump(mode="json"),
+            {"ref": "homelab:963", "title": "Route", "relation": "updates",
+             "preview": "What changed"},
+        )
+        # Whatever the instance carries, it stays inside the frozen contract:
+        # all required properties are produced, none of the defined ones invented.
+        for model in (without, with_preview):
+            produced = set(model.model_dump(mode="json"))
+            self.assertTrue(set(frozen["required"]) <= produced)
+            self.assertLessEqual(produced, set(frozen["properties"]))
+
+
 class QueryLanguageTests(unittest.TestCase):
     """Audit belezi jezik upita, nikad sam tekst upita."""
 

@@ -187,6 +187,10 @@
             "minLength": 1,
             "maxLength": 32,
             "pattern": "^[a-z]+$"
+          },
+          "preview": {
+            "type": "string",
+            "maxLength": 400
           }
         }
       },

@@ -101,6 +101,13 @@ CONTENT_SCAN_LINES = 6
 CONTENT_SCAN_CHARS = 700
 NEWER_NOTES_LIMIT = 3
 NEWER_NOTES_RECHECK_SECONDS = 30.0
+# Agents rarely follow the "call kb_get first" pointer on a warning (homelab:1264,
+# homelab:1394), so `updates`/`corrects` warnings carry this much of the newer
+# note's opening inline: the change is visible where the warning appears.
+NEWER_NOTE_PREVIEW_CHARS = 300
+# Only these relations change facts of the old note; extends/continues/supersedes
+# just add context, so their warning stays title-only.
+PREVIEW_RELATIONS = frozenset({"updates", "corrects"})
 
 
 # ── detection ────────────────────────────────────────────────────────────────
@@ -213,6 +220,49 @@ def _content_head(content: Optional[str]) -> str:
     return "\n".join(lines)[:CONTENT_SCAN_CHARS]
 
 
+def _heading_key(text: str) -> str:
+    """A heading line and its title compare equal after #, whitespace and case."""
+    return text.strip().strip("#").strip().lower()
+
+
+def _skip_blank(lines: list[str], index: int) -> int:
+    while index < len(lines) and not lines[index].strip():
+        index += 1
+    return index
+
+
+def _preview(content: Optional[str], title: str) -> str:
+    """The newer note's first content paragraph, capped for the warning line.
+
+    Built from the already-loaded opening (CONTENT_SCAN_CHARS), never a reread.
+    Skipped before the paragraph: leading blank lines, a leading line that repeats
+    the note title (real cases: homelab:1149, ai:609 — otherwise the preview would
+    be just the title) and a leading `Tags:` line. Whitespace inside collapses to
+    single spaces; a text over NEWER_NOTE_PREVIEW_CHARS cuts at the last whitespace
+    within the cap (hard cut when there is none) and gains a trailing ` …`.
+    """
+    if not content:
+        return ""
+    lines = content.split("\n")
+    index = _skip_blank(lines, 0)
+    if index < len(lines) and _heading_key(lines[index]) == _heading_key(title):
+        index = _skip_blank(lines, index + 1)
+    if index < len(lines) and lines[index].strip().lower().startswith("tags:"):
+        index = _skip_blank(lines, index + 1)
+    paragraph: list[str] = []
+    while index < len(lines) and lines[index].strip():
+        paragraph.append(lines[index].strip())
+        index += 1
+    text = re.sub(r"\s+", " ", " ".join(paragraph)).strip()
+    if len(text) <= NEWER_NOTE_PREVIEW_CHARS:
+        return text
+    head = text[:NEWER_NOTE_PREVIEW_CHARS]
+    cut = max((position for position, char in enumerate(head) if char.isspace()), default=-1)
+    if cut <= 0:
+        return head + " …"
+    return head[:cut].rstrip() + " …"
+
+
 def detect_relations(
     corpus: str,
     entry_id: int,
@@ -272,6 +322,7 @@ def build_edges(entries: Iterable[dict]) -> dict[tuple[str, int], list[dict]]:
                     "id": item["id"],
                     "where": where,
                     "form": form,
+                    "preview": _preview(item.get("content"), title),
                 }
             )
     for target, items in edges.items():
@@ -381,11 +432,18 @@ class NewerNotesIndex:
             )
 
     def for_ref(self, corpus: str, entry_id: int) -> list[dict]:
-        """[{ref, title, relation}] for one result, or [] (never None)."""
-        return [
-            {"ref": item["ref"], "title": item["title"], "relation": item["relation"]}
-            for item in self.edges.get((corpus, entry_id), ())
-        ]
+        """[{ref, title, relation, preview?}] for one result, or [] (never None).
+
+        `preview` appears only for PREVIEW_RELATIONS and only when non-empty;
+        other relations keep exactly {ref, title, relation}.
+        """
+        notes: list[dict] = []
+        for item in self.edges.get((corpus, entry_id), ()):
+            note = {"ref": item["ref"], "title": item["title"], "relation": item["relation"]}
+            if item["relation"] in PREVIEW_RELATIONS and item.get("preview"):
+                note["preview"] = item["preview"]
+            notes.append(note)
+        return notes
 
 
 _warned: dict[str, str] = {}

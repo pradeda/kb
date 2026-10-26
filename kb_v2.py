@@ -421,6 +421,14 @@ class NewerNoteV2(StrictModel):
     ref: str = Field(pattern=r"^(homelab|ai):[1-9][0-9]*$")
     title: str
     relation: str = Field(min_length=1, max_length=32, pattern=r"^[a-z]+$")
+    # The newer note's opening, inline under the warning line for updates/corrects
+    # only. Omitted from the response entirely when unset (exclude_if — a plain
+    # Optional default would emit "preview": null; response_model_exclude_none is
+    # not an option because it would drop the required-nullable fields content,
+    # tags and public_source_url as well).
+    preview: Optional[str] = Field(
+        default=None, max_length=400, exclude_if=lambda value: value is None
+    )
 
 
 class SearchResultV2(StrictModel):

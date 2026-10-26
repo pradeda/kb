@@ -207,6 +207,93 @@ class EdgeFilterTests(unittest.TestCase):
                          ["homelab:993", "homelab:992"])
 
 
+class PreviewTests(unittest.TestCase):
+    """The inline preview shown under an updates/corrects warning."""
+
+    def entry(self, entry_id, title, created_at, content=""):
+        return {
+            "corpus": "homelab", "id": entry_id, "title": title,
+            "content": content, "created_at": created_at,
+        }
+
+    def index_for(self, *entries):
+        index = nn.NewerNotesIndex({}, lambda path: ())
+        index.edges = nn.build_edges(list(entries))
+        return index
+
+    def test_tags_line_is_skipped(self):
+        self.assertEqual(
+            nn._preview("Tags: kb-retrieval,mcp\n\nThe change itself.", "T"),
+            "The change itself.",
+        )
+
+    def test_a_leading_line_repeating_the_title_is_skipped(self):
+        # Real cases homelab:1149 and ai:609: without the skip the preview would be
+        # just the title, in its # heading form, whitespace variant or case.
+        title = "Seerr 502 — requests silently dropped (updates homelab:1275)"
+        for heading in (title, f"# {title}", f"  {title.upper()}  "):
+            with self.subTest(heading=heading):
+                self.assertEqual(
+                    nn._preview(f"{heading}\n\nNow handled by retry policy.", title),
+                    "Now handled by retry policy.",
+                )
+
+    def test_title_leaving_no_body_yields_an_empty_preview(self):
+        self.assertEqual(nn._preview("Only the title", "Only the title"), "")
+
+    def test_first_paragraph_only_and_whitespace_collapsed(self):
+        content = "Line one   with gaps.\n\tand a tab tail.\n\nSecond   paragraph."
+        self.assertEqual(nn._preview(content, "T"), "Line one with gaps. and a tab tail.")
+
+    def test_long_text_cuts_at_the_last_whitespace_within_the_cap(self):
+        preview = nn._preview("word " * 100, "T")
+        # Head is "word " × 60, so the last whitespace sits at index 299: the cut is
+        # at that word boundary, never inside a word.
+        self.assertEqual(preview, "word " * 59 + "word …")
+        self.assertLessEqual(len(preview), nn.NEWER_NOTE_PREVIEW_CHARS + 2)
+
+    def test_no_whitespace_is_hard_cut_at_the_cap(self):
+        self.assertEqual(nn._preview("z" * 400, "T"), "z" * 300 + " …")
+
+    def test_empty_or_missing_content_is_an_empty_preview(self):
+        for content in (None, "", "\n\n   \n"):
+            with self.subTest(content=content):
+                self.assertEqual(nn._preview(content, "T"), "")
+
+    def test_only_fact_changing_relations_carry_the_preview(self):
+        cases = (
+            ("updates", True),
+            ("corrects", True),
+            ("extends", False),
+            # "continues" in this corpus comes from the Serbian verb, not English.
+            ("nastavlja", False),
+            ("supersedes", False),
+        )
+        for marker, carries in cases:
+            with self.subTest(marker=marker):
+                index = self.index_for(
+                    self.entry(963, "Route", "2026-09-19T10:00:00"),
+                    self.entry(
+                        992, f"Change ({marker} homelab:963)", "2026-09-20T10:00:00",
+                        "The actual change to the route.",
+                    ),
+                )
+                [note] = index.for_ref("homelab", 963)
+                self.assertEqual(note["ref"], "homelab:992")
+                self.assertEqual("preview" in note, carries)
+
+    def test_an_empty_preview_omits_the_key(self):
+        index = self.index_for(
+            self.entry(963, "Route", "2026-09-19T10:00:00"),
+            self.entry(992, "Change (updates homelab:963)", "2026-09-20T10:00:00", ""),
+        )
+        self.assertEqual(
+            index.for_ref("homelab", 963),
+            [{"ref": "homelab:992", "title": "Change (updates homelab:963)",
+              "relation": "updates"}],
+        )
+
+
 def corpus_db(path: Path) -> Path:
     connection = sqlite3.connect(path)
     try:
@@ -404,6 +491,7 @@ class SearchSurfaceTests(unittest.TestCase):
                 "ref": "homelab:992",
                 "title": "Forrix Qwen per-model load defaults (updates homelab:963)",
                 "relation": "updates",
+                "preview": "Per-model load defaults persist across reboot.",
             }],
         )
         self.assertEqual(results["homelab:964"]["newer_notes"], [])
@@ -553,6 +641,145 @@ class IndexTests(unittest.TestCase):
         first = index.for_ref("homelab", 963)
         first.append({"ref": "homelab:1", "title": "t", "relation": "updates"})
         self.assertEqual(len(index.for_ref("homelab", 963)), 1)
+
+
+class PreviewSurfaceTests(unittest.TestCase):
+    """The preview reaches the real JSON response; unset stays absent, not null.
+
+    Deliberately outside SearchSurfaceTests: its router fixture predates the v3a
+    calibration of the base commit (reject_threshold 0.40 vs the approved 0.25) and
+    every search there dies with 503 before a response body exists, so that class
+    cannot pin serialization. This one uses the approved calibration and the same
+    real chain: _result -> SearchResultV2/SearchResponseV2 -> route JSON.
+    """
+
+    APPROVED_ROUTER = """router_version: corpus-router-v2-fts5-hybrid
+accept_thresholds:
+  homelab: 0.60
+  ai: 0.60
+reject_threshold: 0.25
+both_margin: 0.05
+dead_zone:
+  lower: 0.40
+  upper: 0.60
+candidate_k: 25
+max_distance:
+  homelab: 0.60
+  ai: 0.60
+ai_decay:
+  mode: disabled
+fts5:
+  enabled: true
+  semantic_k: 20
+  lexical_k: 5
+"""
+
+    PREVIEW = "Per-model load defaults persist across reboot."
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.temp.name)
+        self.source = corpus_db(self.dir / "homelab.db")
+        self.ai_source = empty_corpus_db(self.dir / "ai.db")
+        clients = self.dir / "clients.yml"
+        clients.write_text(CLIENTS, encoding="utf-8")
+        os.chmod(clients, 0o600)
+        router = self.dir / "corpus-router.yml"
+        router.write_text(self.APPROVED_ROUTER, encoding="utf-8")
+        os.chmod(router, 0o600)
+        self.environment = patch.dict(
+            os.environ,
+            {
+                "KB_V2_CLIENTS_CONFIG": str(clients),
+                "KB_CORPUS_ROUTER_CONFIG": str(router),
+                "KB_V2_TOKEN_TEST_FULL": "f" * 64,
+                "KB_FTS5_DIR": str(self.dir),
+            },
+        )
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+        registry = patch.dict(
+            kb_v2.CORPUS_REGISTRY,
+            {
+                "homelab": {"db_path": str(self.source), "collection": "homelab_collection"},
+                "ai": {"db_path": str(self.ai_source), "collection": "ai_collection"},
+            },
+            clear=True,
+        )
+        registry.start()
+        self.addCleanup(registry.stop)
+        health = patch(
+            "kb_v2._corpus_health",
+            side_effect=lambda corpus, _ready: CorpusHealthV2(
+                ready=True, collection=f"{corpus}_collection"
+            ),
+        )
+        health.start()
+        self.addCleanup(health.stop)
+        fts5 = patch("kb_v2.Fts5Index.build", return_value=None)
+        fts5.start()
+        self.addCleanup(fts5.stop)
+        audit = patch("kb_v2._audit")
+        audit.start()
+        self.addCleanup(audit.stop)
+        self.headers = {"Authorization": "Bearer " + "f" * 64}
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def search(self):
+        response = TestClient(create_v2_app(Mock(return_value=[0.1]),
+                                            lambda: FakeReranker([3.0, 2.0]))).post(
+            "/kb/search",
+            headers=self.headers,
+            json={"query": "qwen load defaults", "scope": "homelab",
+                  "top_k": 5, "allow_degraded": False},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        return response
+
+    def test_preview_is_serialized_in_corpora_and_ranked_only_for_updates(self):
+        # homelab:963 gains an updates edge with a body (preview set), homelab:964 an
+        # extends edge with a body (preview computed but held back by the relation).
+        add_entry(
+            self.source, 993, "Forrix GPU cache revisited (extends homelab:964)",
+            "Extra context for the cache note.", "2026-09-21T10:00:00",
+        )
+        with patch("kb_v2._query_collection", side_effect=lambda corpus, *_: [
+            {"entry_id": 963, "distance": 0.1},
+            {"entry_id": 964, "distance": 0.11},
+        ]):
+            value = self.search().json()
+
+        placements = {
+            "corpora": value["corpora"]["homelab"]["results"],
+            "ranked": value["ranked"],
+        }
+        for placement, results in placements.items():
+            items = {item["ref"]: item for item in results}
+            self.assertEqual(sorted(items), ["homelab:963", "homelab:964"], placement)
+            with self.subTest(placement=placement):
+                [updated] = items["homelab:963"]["newer_notes"]
+                self.assertEqual(updated["preview"], self.PREVIEW)
+                [extended] = items["homelab:964"]["newer_notes"]
+                self.assertEqual(extended["relation"], "extends")
+                self.assertNotIn("preview", extended)  # absent, never null
+                # The other nullable fields keep serializing exactly as before.
+                older = items["homelab:963"]
+                self.assertEqual(older["content"], "opencode Qwen route on Forrix, 65536 ctx.")
+                self.assertEqual(older["tags"], "qwen")
+                self.assertIn("public_source_url", older)
+                self.assertIsNone(older["public_source_url"])
+
+    def test_the_wire_json_never_carries_a_null_preview(self):
+        with patch("kb_v2._query_collection", side_effect=lambda corpus, *_: [
+            {"entry_id": 963, "distance": 0.1},
+            {"entry_id": 964, "distance": 0.11},
+        ]):
+            text = self.search().text
+        self.assertNotIn('"preview":null', text)
+        # Once per placement: corpora and ranked.
+        self.assertEqual(text.count(self.PREVIEW), 2)
 
 
 if __name__ == "__main__":

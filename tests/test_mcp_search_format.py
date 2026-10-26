@@ -40,8 +40,11 @@ def hit(corpus, entry_id, content="homelab body", newer_notes=None):
     return value
 
 
-def note(ref, title, relation):
-    return {"ref": ref, "title": title, "relation": relation}
+def note(ref, title, relation, preview=None):
+    value = {"ref": ref, "title": title, "relation": relation}
+    if preview is not None:
+        value["preview"] = preview
+    return value
 
 
 def payload(ranked):
@@ -96,6 +99,51 @@ class MixedFormatTests(unittest.TestCase):
         block_963 = text.split("[homelab:964]")[0]
         self.assertEqual(block_963.count("\u26a0"), 1)
         self.assertNotIn("\u26a0", text.split("[homelab:964]")[1])
+
+    def test_preview_line_follows_the_warning_for_fact_changing_relations(self):
+        for relation in ("updates", "corrects"):
+            with self.subTest(relation=relation):
+                ranked = [
+                    hit("homelab", 1, newer_notes=[
+                        note("homelab:2", "A later note", relation,
+                             preview="What the later note actually changed.")
+                    ]),
+                ]
+                lines = mcp_server._format_corpus_payload(payload(ranked)).splitlines()
+                warning = next(i for i, line in enumerate(lines) if line.startswith("⚠"))
+                self.assertEqual(
+                    lines[warning + 1], "  ↳ What the later note actually changed."
+                )
+
+    def test_no_preview_line_for_extends(self):
+        ranked = [
+            hit("homelab", 1, newer_notes=[
+                note("homelab:2", "A later note", "extends", preview="Held back.")
+            ]),
+        ]
+        text = mcp_server._format_corpus_payload(payload(ranked))
+        self.assertNotIn("↳", text)
+        self.assertIn("⚠ newer note extends this: homelab:2 — A later note", text.splitlines())
+
+    def test_warning_line_is_byte_identical_with_and_without_a_preview(self):
+        suffix = (" — this result may be partly outdated; "
+                  "call kb_get('homelab:2') before relying on it")
+        warnings = []
+        for preview in (None, "The change, inline."):
+            with self.subTest(preview=preview):
+                ranked = [
+                    hit("homelab", 1, newer_notes=[
+                        note("homelab:2", "A later note", "updates", preview=preview)
+                    ]),
+                ]
+                text = mcp_server._format_corpus_payload(payload(ranked))
+                line = next(line for line in text.splitlines() if line.startswith("⚠"))
+                warnings.append(line)
+                self.assertEqual(
+                    line,
+                    "⚠ newer note updates this: homelab:2 — A later note" + suffix,
+                )
+        self.assertEqual(warnings[0], warnings[1])
 
     def test_newer_note_warning_survives_compact_ai_mode(self):
         ranked = [

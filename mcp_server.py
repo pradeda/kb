@@ -115,6 +115,13 @@ def _render_hits(
                     f"call kb_get('{note.get('ref')}') before relying on it"
                 )
             lines.append(line)
+            preview = note.get("preview")
+            if (
+                note.get("relation") in ("updates", "corrects")
+                and isinstance(preview, str)
+                and preview
+            ):
+                lines.append(f"  ↳ {preview}")
         lines.append("")
     return lines
 
