@@ -897,31 +897,8 @@ def sanitize_secrets(content):
                 content = content[:start] + p["placeholder"] + content[end:]
     return content, hits
 
-def _quarantine_payload(orig_title, orig_summary, orig_content, new_title, new_summary):
-    """Pre-redaction text for the .orig backup.
-
-    The content is always included; every other original field the scanner mutated
-    is prefixed with its name, so a secret that lived only in the title (or the
-    summary) survives the redaction of the row and the raw file. Go Gate 1 renders
-    the same shape for the fields it has (quarantinePayload in secretscan.go)."""
-    parts = []
-    if orig_title != new_title:
-        parts.append(f"title: {orig_title or ''}")
-    if orig_summary != new_summary:
-        parts.append(f"summary: {orig_summary or ''}")
-    parts.append(orig_content or "")
-    return "\n\n".join(parts)
-
-def _record_quarantine(entry_id, orig_content, raw_path, hits):
+def _record_quarantine(entry_id, raw_path, hits):
     ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-    bak = ""
-    try:
-        QUARANTINE_DIR.mkdir(mode=0o700, exist_ok=True)
-        bak = QUARANTINE_DIR / f"{entry_id}-{datetime.now().strftime('%Y%m%d-%H%M%S')}.orig"
-        bak.write_text(orig_content or "", encoding="utf-8")
-        os.chmod(bak, 0o600)
-    except Exception as e:
-        print(f"  [WARN] quarantine backup failed: {e}")
     # Redact the on-disk raw archive too, so rsync/NAS copies stay clean.
     if raw_path:
         try:
@@ -936,7 +913,7 @@ def _record_quarantine(entry_id, orig_content, raw_path, hits):
     names = ",".join(f"{h[0]}:{h[1]}" for h in hits)
     try:
         with open(QUARANTINE_LOG, "a") as f:
-            f.write(f"{ts} id={entry_id} source=compile hits={names} backup={bak}\n")
+            f.write(f"{ts} id={entry_id} source=compile hits={names}\n")
         os.chmod(QUARANTINE_LOG, 0o600)
     except Exception as e:
         print(f"  [WARN] quarantine log failed: {e}")
@@ -956,7 +933,6 @@ def sanitize_unembedded(rows):
             db.commit()
             _record_quarantine(
                 entry_id,
-                _quarantine_payload(title or "", summary or "", content or "", new_title, new_summary),
                 raw_path,
                 redact_hits,
             )
