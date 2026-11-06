@@ -296,6 +296,7 @@ def render(model, template_path):
     with open(template_path, "r", encoding="utf-8") as fh:
         html = fh.read()
     payload = json.dumps(model, ensure_ascii=False, separators=(",", ":"))
+    payload = payload.replace("<", "\\u003c")
     if "__ATLAS_DATA__" not in html:
         raise SystemExit("template nema __ATLAS_DATA__ placeholder")
     return html.replace("__ATLAS_DATA__", payload)

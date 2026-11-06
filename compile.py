@@ -847,12 +847,40 @@ def load_secret_rules():
                 f"secret pattern {p['name']!r} capture_group {capture_group} exceeds {p['_re'].groups} groups"
             )
         pats.append(p)
+    allow_set = set()
+    for a in data.get("allowlist", []):
+        clean = _ascii_lower(_ascii_trim(a))
+        if clean:
+            allow_set.add(clean)
+    for a in data.get("allow_contains", []):
+        clean = _ascii_lower(_ascii_trim(a))
+        if clean:
+            allow_set.add(clean)
+    for p in data.get("patterns", []):
+        ph = p.get("placeholder")
+        if ph:
+            clean = _ascii_lower(_ascii_trim(ph))
+            if clean:
+                allow_set.add(clean)
+    for p in data.get("query_redaction_patterns", []):
+        ph = p.get("placeholder")
+        if ph:
+            clean = _ascii_lower(_ascii_trim(ph))
+            if clean:
+                allow_set.add(clean)
     _secret_rules = {
         "patterns": pats,
-        "allow": [a.lower() for a in data.get("allowlist", [])],
-        "allow_sub": [a.lower() for a in data.get("allow_contains", [])],
+        "allow_set": allow_set,
     }
     return _secret_rules
+
+_ASCII_LOWER_TRANS = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")
+
+def _ascii_trim(s: str) -> str:
+    return s.strip(" \t\n\r\v\f")
+
+def _ascii_lower(s: str) -> str:
+    return s.translate(_ASCII_LOWER_TRANS)
 
 def _shannon(s):
     if not s:
@@ -866,16 +894,15 @@ def _shannon(s):
     return -sum((c / n) * log2(c / n) for c in freq.values())
 
 def _allowed(rules, value):
-    v = value.strip().lower()
+    v = _ascii_lower(_ascii_trim(value))
     if not v:
         return True
-    if v in rules["allow"]:
-        return True
-    return any(a in v for a in rules["allow_sub"])
+    return v in rules["allow_set"]
 
 def sanitize_secrets(content):
     rules = load_secret_rules()
     hits = []
+    logged_patterns = set()
     for p in rules["patterns"]:
         for m in reversed(list(p["_re"].finditer(content))):
             try:
@@ -886,6 +913,10 @@ def sanitize_secrets(content):
                 continue
             value = content[start:end]
             if _allowed(rules, value):
+                if p.get("action") == "redact" and not value.lower().startswith("<redacted_"):
+                    if p.get("name") not in logged_patterns:
+                        sys.stderr.write(f"secret scanner: allow-set skipped pattern {p.get('name')}\n")
+                        logged_patterns.add(p.get("name"))
                 continue
             if len(value) < p.get("min_len", 0):
                 continue
@@ -897,6 +928,65 @@ def sanitize_secrets(content):
                 content = content[:start] + p["placeholder"] + content[end:]
     return content, hits
 
+def _sanitize_raw_note(raw: str, entry_path: str = "") -> str:
+    if not raw:
+        clean_raw, _ = sanitize_secrets(raw)
+        return clean_raw
+
+    # Split into physical lines on LF only, keeping line endings (avoids splitting on U+2028/U+2029)
+    parts = raw.split("\n")
+    lines = [p + "\n" for p in parts[:-1]]
+    if parts[-1]:
+        lines.append(parts[-1])
+
+    if not lines or lines[0] not in ("---\n", "---\r\n"):
+        clean_raw, _ = sanitize_secrets(raw)
+        return clean_raw
+
+    closing_idx = -1
+    for i in range(1, len(lines)):
+        if lines[i] in ("---\n", "---\r\n", "---"):
+            closing_idx = i
+            break
+
+    if closing_idx == -1:
+        clean_raw, _ = sanitize_secrets(raw)
+        return clean_raw
+
+    fm_lines = lines[1:closing_idx]
+    new_fm_lines = []
+    fm_changed = False
+
+    for line in fm_lines:
+        line_ending = "\r\n" if line.endswith("\r\n") else ("\n" if line.endswith("\n") else "")
+        line_content = line[:-len(line_ending)] if line_ending else line
+        if ":" in line_content:
+            k, v = line_content.split(":", 1)
+            key = k.strip()
+            if key in ("title", "tags"):
+                try:
+                    decoded = decode_frontmatter_value(v)
+                    cleaned, _ = sanitize_secrets(decoded)
+                    if cleaned != decoded:
+                        new_fm_lines.append(f"{k}: {encode_frontmatter_value(cleaned)}{line_ending}")
+                        fm_changed = True
+                        continue
+                except Exception:
+                    print(f"  [WARN] frontmatter decode failed for {entry_path}: fallback plain-text sanitize")
+                    cleaned_line, _ = sanitize_secrets(line)
+                    if cleaned_line != line:
+                        new_fm_lines.append(cleaned_line)
+                        fm_changed = True
+                        continue
+        new_fm_lines.append(line)
+
+    body = "".join(lines[closing_idx + 1:])
+    clean_body, _ = sanitize_secrets(body)
+    if fm_changed or clean_body != body:
+        return "".join([lines[0]] + new_fm_lines + [lines[closing_idx]] + [clean_body])
+    return raw
+
+
 def _record_quarantine(entry_id, raw_path, hits):
     ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
     # Redact the on-disk raw archive too, so rsync/NAS copies stay clean.
@@ -905,7 +995,7 @@ def _record_quarantine(entry_id, raw_path, hits):
             rp = Path(raw_path)
             if rp.exists():
                 raw = rp.read_text(encoding="utf-8")
-                clean_raw, _ = sanitize_secrets(raw)
+                clean_raw = _sanitize_raw_note(raw, entry_path=str(raw_path or ""))
                 if clean_raw != raw:
                     rp.write_text(clean_raw, encoding="utf-8")
         except Exception as e:
@@ -926,10 +1016,11 @@ def sanitize_unembedded(rows):
         new_content, ch = sanitize_secrets(content or "")
         new_title,   th = sanitize_secrets(title or "")
         new_summary, sh = sanitize_secrets(summary or "")
-        redact_hits = [h for h in (ch + th + sh) if h[1] == "redact"]
-        if redact_hits and (new_content != (content or "") or new_title != (title or "") or new_summary != (summary or "")):
-            db.execute("UPDATE entries SET content=?, title=?, summary=? WHERE id=?",
-                       (new_content, new_title, new_summary, entry_id))
+        new_tags,    tgh = sanitize_secrets(tags or "")
+        redact_hits = [h for h in (ch + th + sh + tgh) if h[1] == "redact"]
+        if redact_hits and (new_content != (content or "") or new_title != (title or "") or new_summary != (summary or "") or new_tags != (tags or "")):
+            db.execute("UPDATE entries SET content=?, title=?, summary=?, tags=? WHERE id=?",
+                       (new_content, new_title, new_summary, new_tags, entry_id))
             db.commit()
             _record_quarantine(
                 entry_id,
@@ -937,7 +1028,7 @@ def sanitize_unembedded(rows):
                 redact_hits,
             )
             print(f"  [REDACT] #{entry_id}: {', '.join(h[0] for h in redact_hits)}")
-        cleaned.append((entry_id, etype, new_content, new_title, tags, new_summary, raw_path))
+        cleaned.append((entry_id, etype, new_content, new_title, new_tags, new_summary, raw_path))
     db.close()
     return cleaned
 

@@ -63,6 +63,11 @@ while read -r filepath; do
 
     now=$(date +%s)
     last=$(cat "$state" 2>/dev/null || echo 0)
+    if [[ ! "$last" =~ ^[1-9][0-9]{0,17}$ ]]; then
+        last=0
+    elif (( last > now )); then
+        last=0
+    fi
     elapsed=$(( now - last ))
     if (( elapsed < min_interval )); then
         sleep $(( min_interval - elapsed ))
