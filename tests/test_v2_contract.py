@@ -240,6 +240,45 @@ fts5:
                     self.assertEqual(resp.status_code, 200, f"{path} full client scope {allowed_scope} should be 200")
                     self.assertGreater(self.embed.call_count, 0)
 
+    def test_query_log_multiword_secret_assignment_leaves_no_remainder(self) -> None:
+        """A logged query with a multi-word secret assignment must leave no secret remainder."""
+        import query_log
+        with tempfile.TemporaryDirectory() as tmp:
+            rules_path = Path(tmp) / "secret_patterns.json"
+            rules_data = json.loads(
+                (Path(__file__).resolve().parent.parent / "secret_patterns.json").read_text(encoding="utf-8")
+            )
+            # Use the updated secret_assignment regex from the shared definition
+            rules_data["patterns"] = [
+                p if p["name"] != "secret_assignment" else dict(
+                    p,
+                    regex=r'(?i)(?:password|passwd|pwd|secret|client_secret|access[_-]?token|auth[_-]?token)["\']?[ \t]*[:=][ \t]*["\']?([^\s"\']+(?:[ \t]+[^\s"\']+)*)',
+                )
+                for p in rules_data["patterns"]
+            ]
+            rules_path.write_text(json.dumps(rules_data), encoding="utf-8")
+            os.chmod(rules_path, 0o600)
+
+            rules = query_log._RulesCache(rules_path).load()
+
+            # 1. Bare multi-word query: leaves no remainder
+            q1 = "password: hunter2 extra words"
+            redacted1, changed1 = query_log.redact_text(q1, rules)
+            self.assertTrue(changed1)
+            self.assertNotIn("hunter2", redacted1)
+            self.assertNotIn("extra", redacted1)
+            self.assertNotIn("words", redacted1)
+            self.assertEqual(redacted1, "<REDACTED>")
+
+            # 2. Quoted multi-word query: leaves no remainder
+            q2 = 'find password: "two words here" safely'
+            redacted2, changed2 = query_log.redact_text(q2, rules)
+            self.assertTrue(changed2)
+            self.assertNotIn("two", redacted2)
+            self.assertNotIn("words", redacted2)
+            self.assertNotIn("here", redacted2)
+            self.assertEqual(redacted2, 'find <REDACTED> safely')
+
     def test_strict_validation_rejects_empty_extra_and_wrong_types(self) -> None:
         cases = [
             self.request("homelab", query="   "),
