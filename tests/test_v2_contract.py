@@ -245,18 +245,8 @@ fts5:
         import query_log
         with tempfile.TemporaryDirectory() as tmp:
             rules_path = Path(tmp) / "secret_patterns.json"
-            rules_data = json.loads(
-                (Path(__file__).resolve().parent.parent / "secret_patterns.json").read_text(encoding="utf-8")
-            )
-            # Use the updated secret_assignment regex from the shared definition
-            rules_data["patterns"] = [
-                p if p["name"] != "secret_assignment" else dict(
-                    p,
-                    regex=r'(?i)(?:password|passwd|pwd|secret|client_secret|access[_-]?token|auth[_-]?token)["\']?[ \t]*[:=][ \t]*["\']?([^\s"\']+(?:[ \t]+[^\s"\']+)*)',
-                )
-                for p in rules_data["patterns"]
-            ]
-            rules_path.write_text(json.dumps(rules_data), encoding="utf-8")
+            source_rules = Path(__file__).resolve().parent.parent / "secret_patterns.json"
+            rules_path.write_bytes(source_rules.read_bytes())
             os.chmod(rules_path, 0o600)
 
             rules = query_log._RulesCache(rules_path).load()
