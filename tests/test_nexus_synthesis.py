@@ -7,6 +7,7 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 from kb_search_api import (
+    SYNTHESIS_MIN_SCORE,
     NexusRelevanceRequest,
     RerankerUnavailable,
     kb_synthesize_nexus_relevance,
@@ -73,7 +74,9 @@ class NexusSynthesisTests(unittest.TestCase):
             ],
         }
         with retriever(
-            candidate(400, 0.91), candidate(401, 0.82), candidate(999, 0.59)
+            candidate(400, 0.91),
+            candidate(401, 0.82),
+            candidate(999, round(SYNTHESIS_MIN_SCORE - 0.05, 2)),
         ), patch(
             "kb_search_api._call_synthesis_model", return_value=model_output
         ) as provider, patch.dict("os.environ", {"KB_SYNTHESIS_TOKEN": "test"}):
@@ -155,7 +158,7 @@ class NexusSynthesisTests(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 502)
 
     def test_no_strong_match_skips_model_call(self) -> None:
-        with retriever(candidate(400, 0.59)), patch(
+        with retriever(candidate(400, round(SYNTHESIS_MIN_SCORE - 0.05, 2))), patch(
             "kb_search_api._call_synthesis_model"
         ) as provider, patch.dict("os.environ", {"KB_SYNTHESIS_TOKEN": "test"}):
             response = kb_synthesize_nexus_relevance(

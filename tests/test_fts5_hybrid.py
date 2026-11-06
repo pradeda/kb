@@ -212,7 +212,8 @@ class Fts5DegradationTests(unittest.TestCase):
                 "homelab", [0.1], self.config, None, None, index, "docker", status
             )
         self.assertEqual(candidates, [])
-        self.assertIn("OperationalError", status.get("degraded", ""))
+        self.assertIn("database_error", status.get("degraded", ""))
+        self.assertNotIn("OperationalError", status.get("degraded", ""))
 
     def test_healthy_index_records_no_degradation(self) -> None:
         status: dict[str, str] = {}
@@ -243,7 +244,7 @@ class Fts5DegradationTests(unittest.TestCase):
 accept_thresholds:
   homelab: 0.60
   ai: 0.60
-reject_threshold: 0.40
+reject_threshold: 0.25
 both_margin: 0.05
 dead_zone:
   lower: 0.40
@@ -555,7 +556,7 @@ class Fts5FreshnessEndpointTests(unittest.TestCase):
 accept_thresholds:
   homelab: 0.60
   ai: 0.60
-reject_threshold: 0.40
+reject_threshold: 0.25
 both_margin: 0.05
 dead_zone:
   lower: 0.40

@@ -381,7 +381,7 @@ ROUTER = """router_version: corpus-router-v2-fts5-hybrid
 accept_thresholds:
   homelab: 0.60
   ai: 0.60
-reject_threshold: 0.40
+reject_threshold: 0.25
 both_margin: 0.05
 dead_zone:
   lower: 0.40
