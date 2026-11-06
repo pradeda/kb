@@ -192,6 +192,54 @@ fts5:
         self.assertEqual(auto.status_code, 409)
         self.assertEqual(auto.json()["detail"]["reason"], "auto_routing_not_enabled")
 
+    def test_trace_scope_authorization_contracts(self) -> None:
+        """Trace routes must enforce client allowed_scopes before embedding and store access."""
+        homelab_headers = {"Authorization": "Bearer " + "h" * 64}
+        full_headers = {"Authorization": "Bearer " + "f" * 64}
+
+        routes = [
+            ("/kb/trace", {"query": "hello trace"}),
+            ("/kb/trace/dual", {"original_query": "hello", "rewritten_query": "world"}),
+        ]
+
+        for path, base_payload in routes:
+            # 1. Homelab-only client: refused scopes (ai, both, omitted default)
+            for forbidden_payload in [
+                dict(base_payload, scope="ai"),
+                dict(base_payload, scope="both"),
+                dict(base_payload),  # no scope field -> defaults to "both"
+            ]:
+                self.embed.reset_mock()
+                with patch("kb_v2._query_collection_raw") as mock_qraw, \
+                     patch("kb_v2._query_collection") as mock_q, \
+                     patch("kb_v2._fetch_candidates") as mock_fetch:
+                    resp = self.client.post(path, headers=homelab_headers, json=forbidden_payload)
+                    self.assertEqual(resp.status_code, 403, f"{path} with {forbidden_payload} should be 403")
+                    self.assertEqual(resp.json(), {"detail": "Scope is not allowed for this client"})
+                    self.embed.assert_not_called()
+                    mock_qraw.assert_not_called()
+                    mock_q.assert_not_called()
+                    mock_fetch.assert_not_called()
+
+            # 2. Homelab-only client: authorized scope (homelab) gets 200
+            self.embed.reset_mock()
+            with patch("kb_v2._query_collection_raw", return_value=([], 0)), \
+                 patch("kb_v2._query_collection", return_value=[]), \
+                 patch("kb_v2._fetch_candidates", return_value=[]):
+                resp = self.client.post(path, headers=homelab_headers, json=dict(base_payload, scope="homelab"))
+                self.assertEqual(resp.status_code, 200, f"{path} homelab scope should be 200")
+                self.assertGreater(self.embed.call_count, 0)
+
+            # 3. Authorized client (full): ai and both get 200
+            for allowed_scope in ["ai", "both"]:
+                self.embed.reset_mock()
+                with patch("kb_v2._query_collection_raw", return_value=([], 0)), \
+                     patch("kb_v2._query_collection", return_value=[]), \
+                     patch("kb_v2._fetch_candidates", return_value=[]):
+                    resp = self.client.post(path, headers=full_headers, json=dict(base_payload, scope=allowed_scope))
+                    self.assertEqual(resp.status_code, 200, f"{path} full client scope {allowed_scope} should be 200")
+                    self.assertGreater(self.embed.call_count, 0)
+
     def test_strict_validation_rejects_empty_extra_and_wrong_types(self) -> None:
         cases = [
             self.request("homelab", query="   "),

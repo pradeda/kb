@@ -1857,6 +1857,8 @@ def create_v2_app(
     ):
         """Per-stage retrieval trace for eval diagnostics."""
         started = time.perf_counter()
+        if request.scope not in client.allowed_scopes:
+            raise HTTPException(status_code=403, detail="Scope is not allowed for this client")
         if router_snapshot is None:
             raise HTTPException(status_code=503, detail="router_config_unavailable")
         rc = router_snapshot
@@ -1979,6 +1981,8 @@ def create_v2_app(
     ):
         """Dual-query retrieval: union candidates before rerank for query-rewriting eval."""
         started = time.perf_counter()
+        if request.scope not in client.allowed_scopes:
+            raise HTTPException(status_code=403, detail="Scope is not allowed for this client")
         if router_snapshot is None:
             raise HTTPException(status_code=503, detail="router_config_unavailable")
         rc = router_snapshot
