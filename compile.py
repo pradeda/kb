@@ -899,6 +899,11 @@ def _allowed(rules, value):
         return True
     return v in rules["allow_set"]
 
+def _is_own_marker_continuation(value, placeholder):
+    v = _ascii_lower(_ascii_trim(value))
+    marker = _ascii_lower(placeholder)
+    return v == marker or v.startswith(marker + " ") or v.startswith(marker + "\t")
+
 def sanitize_secrets(content):
     rules = load_secret_rules()
     hits = []
@@ -912,6 +917,8 @@ def sanitize_secrets(content):
             if start < 0:
                 continue
             value = content[start:end]
+            if p.get("action") == "redact" and _is_own_marker_continuation(value, p["placeholder"]):
+                continue
             if _allowed(rules, value):
                 if p.get("action") == "redact" and not value.lower().startswith("<redacted_"):
                     if p.get("name") not in logged_patterns:
