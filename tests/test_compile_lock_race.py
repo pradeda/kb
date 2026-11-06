@@ -98,7 +98,7 @@ class _Vector(list):
 class StubModel:
     """Stands in for FastEmbed; embedding values are irrelevant to these tests."""
 
-    def passage_embed(self, texts, **kwargs):
+    def passage_embed(self, texts, batch_size=None):
         return [_Vector([0.0, 1.0]) for _ in texts]
 
 
