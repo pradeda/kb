@@ -15,12 +15,14 @@ Run from /opt/kb:  /opt/kb/venv-search/bin/python3 -m unittest tests.test_fts5_h
 """
 from __future__ import annotations
 
+import io
 import os
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -199,21 +201,33 @@ class Fts5DegradationTests(unittest.TestCase):
         status: dict[str, str] = {}
         # Source gone and index gone: the refresh cannot fingerprint, and the query
         # cannot read — both must land in the status instead of failing the search.
+        sentinel = "FAKE_QUERY_SENTINEL_c8e92"
+        synthetic_error = sqlite3.OperationalError(f"syntax error near {sentinel}")
         index = kb_v2.Fts5Index(
             "homelab",
             str(self.dir / "missing-source.db"),
             str(self.dir / "missing-index.db"),
             (),
         )
-        with patch("kb_v2._query_collection", return_value=[]), patch(
+        stdout_buf = io.StringIO()
+        stderr_buf = io.StringIO()
+        with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf), patch.dict(
+            kb_v2._fts5_warned, {}, clear=True
+        ), patch("kb_v2._query_collection", return_value=[]), patch(
             "kb_v2._fetch_candidates", return_value=[]
+        ), patch(
+            "kb_v2._fts5_query", side_effect=synthetic_error
         ):
             candidates = kb_v2._retrieve_corpus(
                 "homelab", [0.1], self.config, None, None, index, "docker", status
             )
         self.assertEqual(candidates, [])
-        self.assertIn("database_error", status.get("degraded", ""))
-        self.assertNotIn("OperationalError", status.get("degraded", ""))
+        self.assertEqual(
+            status.get("degraded"), "lexical index unusable (database_error)"
+        )
+        self.assertNotIn(sentinel, status.get("degraded", ""))
+        self.assertNotIn(sentinel, stdout_buf.getvalue())
+        self.assertNotIn(sentinel, stderr_buf.getvalue())
 
     def test_healthy_index_records_no_degradation(self) -> None:
         status: dict[str, str] = {}
